@@ -144,11 +144,17 @@
       isGlp: false
     })),
     supabaseConfig: JSON.parse(localStorage.getItem(STORAGE_KEYS.SUPABASE_CONFIG) || JSON.stringify({
-      url: '',
-      anonKey: ''
+      url: 'https://ejmrmnihnycxulitgvkv.supabase.co',
+      anonKey: 'sb_publishable_PAYdOPuiX2w3DODRZLotVw_Nt_cbDwE'
     })),
     syncQueue: JSON.parse(localStorage.getItem(STORAGE_KEYS.SYNC_QUEUE) || '[]')
   };
+
+  // Ensure default credentials if empty
+  if (!state.supabaseConfig.url) {
+    state.supabaseConfig.url = 'https://ejmrmnihnycxulitgvkv.supabase.co';
+    state.supabaseConfig.anonKey = 'sb_publishable_PAYdOPuiX2w3DODRZLotVw_Nt_cbDwE';
+  }
 
   let activeSelectedMealSlot = 0;
   let supabaseClient = null;
