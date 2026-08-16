@@ -2335,3 +2335,113 @@ body {
   transform: translateY(-1px);
 }
 
+/* --- SUPABASE AUTH & CLOUD SYNC UI --- */
+.auth-nav-tabs {
+  display: flex;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+  gap: 4px;
+}
+
+.auth-nav-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.auth-nav-btn:hover {
+  color: var(--text-primary);
+}
+
+.auth-nav-btn.active {
+  background: var(--bg-surface-raised);
+  color: var(--emerald-400);
+  box-shadow: var(--shadow-sm);
+}
+
+.sync-status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface-raised);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.sync-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  display: inline-block;
+}
+
+.sync-dot.synced {
+  background: var(--emerald-400);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+}
+
+.sync-dot.syncing {
+  background: var(--amber-400);
+  animation: pulse 1s infinite;
+}
+
+.sync-dot.offline {
+  background: var(--sky-400);
+}
+
+.sync-dot.disconnected {
+  background: var(--text-muted);
+}
+
+.auth-notice-box {
+  background: rgba(14, 165, 233, 0.08);
+  border: 1px solid var(--border-sky);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.auth-error-msg {
+  background: var(--rose-surface);
+  border: 1px solid var(--border-rose);
+  color: #fb7185;
+  padding: 8px 12px;
+  border-radius: var(--radius-xs);
+  font-size: 0.75rem;
+  font-weight: 600;
+  display: none;
+}
+
+.config-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  margin-top: 4px;
+  text-align: center;
+  width: 100%;
+}
+
+.config-toggle-btn:hover {
+  color: var(--text-secondary);
+}
+
+

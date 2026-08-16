@@ -607,11 +607,11 @@
     </div>
   </div>
 
-  <!-- MODAL 3: USER PROFILE & CLOUD ACCOUNT -->
+  <!-- MODAL 3: SUPABASE AUTH & CLOUD SYNC CENTER -->
   <div class="modal-overlay" id="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
     <div class="modal-window">
       <div class="modal-header">
-        <h2 class="modal-title" id="profile-modal-title">Athlete Profile & Cloud Sync</h2>
+        <h2 class="modal-title" id="profile-modal-title">☁️ Supabase Cloud & Account</h2>
         <button class="close-modal-btn" aria-label="Close modal">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M18 6L6 18M6 6l12 12"/>
@@ -619,8 +619,33 @@
         </button>
       </div>
 
-      <div class="profile-avatar-row">
-        <div class="profile-avatar-display" id="profile-avatar-display">⚡</div>
+      <!-- Auth Navigation Tabs -->
+      <div class="auth-nav-tabs" id="auth-nav-tabs">
+        <button type="button" class="auth-nav-btn active" id="tab-auth-profile">Profile & Sync</button>
+        <button type="button" class="auth-nav-btn" id="tab-auth-signin">Sign In</button>
+        <button type="button" class="auth-nav-btn" id="tab-auth-signup">Create Account</button>
+        <button type="button" class="auth-nav-btn" id="tab-auth-config">⚙️ Supabase</button>
+      </div>
+
+      <!-- Cloud Sync Status Pill -->
+      <div class="sync-status-indicator" id="sync-status-indicator">
+        <span class="sync-dot offline" id="sync-dot"></span>
+        <span id="sync-status-text">Local Cache Active (Instant Snappy Mode)</span>
+      </div>
+
+      <!-- Error Message Banner -->
+      <div class="auth-error-msg" id="auth-error-msg"></div>
+
+      <!-- SECTION A: LOGGED IN / PROFILE TAB -->
+      <div id="auth-view-profile" style="display: flex; flex-direction: column; gap: 12px;">
+        <div class="profile-avatar-row">
+          <div class="profile-avatar-display" id="profile-avatar-display">⚡</div>
+          <div style="flex: 1;">
+            <div id="auth-logged-user-email" style="font-size: 0.8125rem; font-weight: 700; color: var(--text-primary);">Guest Mode (Offline Cache)</div>
+            <div style="font-size: 0.6875rem; color: var(--text-muted); margin-top: 2px;">Sub-millisecond local snappiness active</div>
+          </div>
+        </div>
+
         <div>
           <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px;">Choose Avatar</div>
           <div style="display: flex; gap: 6px;">
@@ -631,28 +656,95 @@
             <button type="button" class="btn-secondary avatar-option-btn" data-avatar="🏆" style="padding: 4px 8px;">🏆</button>
           </div>
         </div>
-      </div>
 
-      <div class="auth-form">
         <div class="auth-input-group">
           <label class="auth-label" for="auth-name-input">Athlete Name</label>
           <input type="text" id="auth-name-input" class="auth-input" placeholder="e.g. Alex" value="Athlete" />
         </div>
 
+        <div style="display: flex; gap: 8px; margin-top: 4px;">
+          <button type="button" class="btn-secondary" id="force-cloud-sync-btn" style="flex: 1;">🔄 Sync to Cloud</button>
+          <button type="button" class="btn-primary" id="save-profile-btn" style="flex: 1;">Save Profile</button>
+        </div>
+
+        <button type="button" class="btn-secondary" id="sign-out-btn" style="display: none; color: #fb7185; border-color: rgba(244, 63, 94, 0.3);">
+          Sign Out of Account
+        </button>
+      </div>
+
+      <!-- SECTION B: SIGN IN TAB -->
+      <div id="auth-view-signin" style="display: none; flex-direction: column; gap: 10px;">
+        <div class="auth-notice-box">
+          Sign in to restore your logs, blueprints, and quest streaks across devices.
+        </div>
+
         <div class="auth-input-group">
-          <label class="auth-label" for="auth-email-input">Account Email</label>
-          <input type="email" id="auth-email-input" class="auth-input" placeholder="you@example.com" value="athlete@protein.local" />
+          <label class="auth-label" for="signin-email-input">Email Address</label>
+          <input type="email" id="signin-email-input" class="auth-input" placeholder="you@example.com" />
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-label" for="signin-password-input">Password</label>
+          <input type="password" id="signin-password-input" class="auth-input" placeholder="••••••••" />
+        </div>
+
+        <button type="button" class="btn-primary" id="submit-signin-btn" style="width: 100%; margin-top: 6px;">
+          🔑 Sign In to Supabase
+        </button>
+      </div>
+
+      <!-- SECTION C: CREATE ACCOUNT TAB -->
+      <div id="auth-view-signup" style="display: none; flex-direction: column; gap: 10px;">
+        <div class="auth-notice-box">
+          ✨ <strong>Automatic Migration:</strong> Your current local logs and blueprint will automatically transfer to your new cloud account!
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-label" for="signup-name-input">Full Name</label>
+          <input type="text" id="signup-name-input" class="auth-input" placeholder="e.g. Alex Hunter" />
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-label" for="signup-email-input">Email Address</label>
+          <input type="email" id="signup-email-input" class="auth-input" placeholder="you@example.com" />
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-label" for="signup-password-input">Create Password</label>
+          <input type="password" id="signup-password-input" class="auth-input" placeholder="At least 6 characters" />
+        </div>
+
+        <button type="button" class="btn-primary" id="submit-signup-btn" style="width: 100%; margin-top: 6px;">
+          🚀 Create Account & Sync Data
+        </button>
+      </div>
+
+      <!-- SECTION D: SUPABASE CONFIGURATION TAB -->
+      <div id="auth-view-config" style="display: none; flex-direction: column; gap: 10px;">
+        <div class="auth-notice-box">
+          Connect your free Supabase project to enable Cloud Database & Authentication.
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-label" for="supabase-url-input">Supabase Project URL</label>
+          <input type="url" id="supabase-url-input" class="auth-input" placeholder="https://xyzcompany.supabase.co" />
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-label" for="supabase-anon-input">Supabase Anon Key (Public)</label>
+          <input type="password" id="supabase-anon-input" class="auth-input" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." />
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-top: 4px;">
+          <button type="button" class="btn-primary" id="save-supabase-config-btn" style="flex: 1;">Save Connection</button>
+          <button type="button" class="btn-secondary" id="test-supabase-conn-btn" style="flex: 1;">Test Connection</button>
+        </div>
+
+        <div style="font-size: 0.6875rem; color: var(--text-muted); line-height: 1.4; margin-top: 4px;">
+          💡 <em>Tip:</em> Run the <code>supabase_schema.sql</code> script in your Supabase SQL Editor to set up all tables and RLS security policies with 1 click.
         </div>
       </div>
 
-      <div class="cloud-sync-pill">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
-        </svg>
-        <span>Cloud Sync Active • All logs backed up</span>
-      </div>
-
-      <button class="btn-primary" id="save-profile-btn" style="width: 100%;">Save & Sync Account</button>
     </div>
   </div>
 
@@ -705,6 +797,9 @@
 
   <!-- Toast Notification Container -->
   <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+  <!-- Supabase JS Client SDK v2 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
   <script src="app.js"></script>
 </body>

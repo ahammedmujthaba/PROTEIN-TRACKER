@@ -1,6 +1,6 @@
 /**
- * PROTEIN TRACKER - SCIENTIFIC ONBOARDING & HABIT ENGINE
- * Welcome Onboarding Screen | Step-by-Step Scientific Quiz | GLP-1 Support | Goal Rescue Coach | Dynamic Meal Breakout
+ * PROTEIN TRACKER - SCIENTIFIC ONBOARDING, SUPABASE CLOUD & CACHE-FIRST SYNC ENGINE
+ * Supabase PostgreSQL + Auth (RLS) | Cache-First Optimistic Sync | 5-Step Scientific Quiz | GLP-1 Support
  */
 
 (function () {
@@ -15,7 +15,10 @@
     PROFILE: 'pt_user_profile',
     BLUEPRINT: 'pt_blueprint_data',
     BONUS_XP: 'pt_bonus_xp',
-    ONBOARDED_V5: 'pt_onboarded_tour_v5'
+    ONBOARDED_V5: 'pt_onboarded_tour_v5',
+    SUPABASE_CONFIG: 'pt_supabase_config',
+    SYNC_QUEUE: 'pt_sync_pending_queue',
+    LAST_SYNC: 'pt_last_cloud_sync_time'
   };
 
   const DEFAULT_TARGET = 150;
@@ -116,7 +119,7 @@
     }
   ];
 
-  // --- 2. APPLICATION STATE ---
+  // --- 2. APPLICATION STATE (CACHE-FIRST) ---
   let state = {
     target: parseInt(localStorage.getItem(STORAGE_KEYS.TARGET), 10) || DEFAULT_TARGET,
     logs: JSON.parse(localStorage.getItem(STORAGE_KEYS.LOGS) || '[]'),
@@ -125,10 +128,10 @@
     bonusXp: parseInt(localStorage.getItem(STORAGE_KEYS.BONUS_XP), 10) || 0,
     profile: JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE) || JSON.stringify({
       name: 'Athlete',
-      email: 'athlete@protein.local',
+      email: '',
       avatar: '⚡',
-      isLoggedIn: true,
-      joinedDate: '2026-08-16'
+      isLoggedIn: false,
+      userId: null
     })),
     blueprint: JSON.parse(localStorage.getItem(STORAGE_KEYS.BLUEPRINT) || JSON.stringify({
       active: true,
@@ -139,12 +142,18 @@
       ratio: 2.0,
       meals: 3,
       isGlp: false
-    }))
+    })),
+    supabaseConfig: JSON.parse(localStorage.getItem(STORAGE_KEYS.SUPABASE_CONFIG) || JSON.stringify({
+      url: '',
+      anonKey: ''
+    })),
+    syncQueue: JSON.parse(localStorage.getItem(STORAGE_KEYS.SYNC_QUEUE) || '[]')
   };
 
   let activeSelectedMealSlot = 0;
+  let supabaseClient = null;
 
-  function saveState() {
+  function saveLocalState() {
     localStorage.setItem(STORAGE_KEYS.TARGET, state.target);
     localStorage.setItem(STORAGE_KEYS.LOGS, JSON.stringify(state.logs));
     localStorage.setItem(STORAGE_KEYS.PRESETS, JSON.stringify(state.presets));
@@ -152,9 +161,290 @@
     localStorage.setItem(STORAGE_KEYS.BONUS_XP, state.bonusXp);
     localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(state.profile));
     localStorage.setItem(STORAGE_KEYS.BLUEPRINT, JSON.stringify(state.blueprint));
+    localStorage.setItem(STORAGE_KEYS.SYNC_QUEUE, JSON.stringify(state.syncQueue));
   }
 
-  // --- 3. TIME & DATE HELPERS ---
+  // --- 3. SUPABASE CLIENT & CLOUD SYNC ENGINE ---
+  function initSupabase() {
+    const cfg = state.supabaseConfig;
+    if (cfg && cfg.url && cfg.anonKey && window.supabase && window.supabase.createClient) {
+      try {
+        supabaseClient = window.supabase.createClient(cfg.url, cfg.anonKey);
+        
+        // Listen to Auth State Changes
+        supabaseClient.auth.onAuthStateChange(async (event, session) => {
+          if (session && session.user) {
+            state.profile.isLoggedIn = true;
+            state.profile.userId = session.user.id;
+            state.profile.email = session.user.email;
+            if (session.user.user_metadata && session.user.user_metadata.name) {
+              state.profile.name = session.user.user_metadata.name;
+            }
+            if (session.user.user_metadata && session.user.user_metadata.avatar) {
+              state.profile.avatar = session.user.user_metadata.avatar;
+            }
+            saveLocalState();
+            updateSyncStatusUI('synced', `Connected as ${session.user.email}`);
+            
+            // Sync / Hydrate cloud data
+            await hydrateFromCloud();
+            // Process any pending offline mutations
+            flushSyncQueue();
+          } else {
+            state.profile.isLoggedIn = false;
+            state.profile.userId = null;
+            saveLocalState();
+            updateSyncStatusUI('offline', 'Guest Mode (Local Cache Active)');
+          }
+          renderAuthViews();
+          updateDashboard();
+        });
+
+        updateSyncStatusUI('synced', 'Supabase Connected • Snappy Cache Active');
+      } catch (err) {
+        console.warn('Supabase initialization failed:', err);
+        updateSyncStatusUI('offline', 'Local Cache Active (Snappy Mode)');
+      }
+    } else {
+      updateSyncStatusUI('offline', 'Local Cache Active (Snappy Mode)');
+    }
+  }
+
+  function updateSyncStatusUI(status, message) {
+    const dot = document.getElementById('sync-dot');
+    const text = document.getElementById('sync-status-text');
+    if (!dot || !text) return;
+
+    dot.className = `sync-dot ${status}`;
+    text.textContent = message;
+  }
+
+  // Optimistic Async Mutation Queue
+  async function enqueueCloudMutation(table, action, data) {
+    if (!state.profile.isLoggedIn || !supabaseClient || !state.profile.userId) {
+      return; // Data safely saved in local cache for guest
+    }
+
+    const job = {
+      id: 'sync_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+      table,
+      action,
+      data: { ...data, user_id: state.profile.userId },
+      timestamp: Date.now()
+    };
+
+    state.syncQueue.push(job);
+    saveLocalState();
+    flushSyncQueue();
+  }
+
+  async function flushSyncQueue() {
+    if (!supabaseClient || !state.profile.isLoggedIn || state.syncQueue.length === 0) return;
+    if (!navigator.onLine) {
+      updateSyncStatusUI('offline', 'Offline • Changes saved locally');
+      return;
+    }
+
+    updateSyncStatusUI('syncing', 'Syncing changes to Supabase...');
+
+    const queue = [...state.syncQueue];
+    const remainingQueue = [];
+
+    for (const job of queue) {
+      try {
+        if (job.action === 'UPSERT') {
+          await supabaseClient.from(job.table).upsert(job.data);
+        } else if (job.action === 'INSERT') {
+          await supabaseClient.from(job.table).insert(job.data);
+        } else if (job.action === 'DELETE') {
+          if (job.data.id) {
+            await supabaseClient.from(job.table).delete().match({ id: job.data.id, user_id: state.profile.userId });
+          }
+        }
+      } catch (err) {
+        console.warn(`Sync job failed for ${job.table}:`, err);
+        remainingQueue.push(job);
+      }
+    }
+
+    state.syncQueue = remainingQueue;
+    localStorage.setItem(STORAGE_KEYS.LAST_SYNC, new Date().toISOString());
+    saveLocalState();
+
+    if (remainingQueue.length === 0) {
+      updateSyncStatusUI('synced', `🟢 Synced with Supabase (${state.profile.email})`);
+    } else {
+      updateSyncStatusUI('syncing', `${remainingQueue.length} changes queued for sync`);
+    }
+  }
+
+  // Hydrate & Merge Cloud Data into Local Cache on Login
+  async function hydrateFromCloud() {
+    if (!supabaseClient || !state.profile.userId) return;
+
+    try {
+      updateSyncStatusUI('syncing', 'Restoring cloud data...');
+
+      // 1. Fetch Profile
+      const { data: profileData } = await supabaseClient
+        .from('profiles')
+        .select('*')
+        .eq('id', state.profile.userId)
+        .single();
+
+      if (profileData) {
+        state.profile.name = profileData.name || state.profile.name;
+        state.profile.avatar = profileData.avatar || state.profile.avatar;
+        state.target = profileData.target_grams || state.target;
+        state.bonusXp = profileData.bonus_xp || state.bonusXp;
+      }
+
+      // 2. Fetch Blueprint
+      const { data: blueprintData } = await supabaseClient
+        .from('blueprints')
+        .select('*')
+        .eq('user_id', state.profile.userId)
+        .single();
+
+      if (blueprintData) {
+        state.blueprint = {
+          active: blueprintData.active !== false,
+          weight: Number(blueprintData.weight) || 75,
+          unit: blueprintData.unit || 'kg',
+          goalKey: blueprintData.goal_key || 'muscle',
+          activityKey: blueprintData.activity_key || 'active',
+          ratio: Number(blueprintData.ratio) || 2.0,
+          meals: blueprintData.meals || 3,
+          isGlp: blueprintData.is_glp || false
+        };
+      }
+
+      // 3. Fetch Protein Logs
+      const { data: cloudLogs } = await supabaseClient
+        .from('protein_logs')
+        .select('*')
+        .eq('user_id', state.profile.userId)
+        .order('timestamp', { ascending: true });
+
+      if (cloudLogs && cloudLogs.length > 0) {
+        const localLogIds = new Set(state.logs.map((l) => l.id));
+        cloudLogs.forEach((cl) => {
+          if (!localLogIds.has(cl.id)) {
+            state.logs.push({
+              id: cl.id,
+              grams: cl.grams,
+              name: cl.name,
+              timestamp: cl.timestamp,
+              dateStr: cl.date_str,
+              mealSlot: cl.meal_slot
+            });
+          }
+        });
+      }
+
+      // 4. Fetch Custom Presets
+      const { data: cloudPresets } = await supabaseClient
+        .from('custom_presets')
+        .select('*')
+        .eq('user_id', state.profile.userId);
+
+      if (cloudPresets && cloudPresets.length > 0) {
+        state.presets = cloudPresets.map((cp) => ({
+          id: cp.id,
+          name: cp.name,
+          grams: cp.grams,
+          tag: cp.tag
+        }));
+      }
+
+      // 5. Fetch Challenges Progression
+      const { data: cloudChallenges } = await supabaseClient
+        .from('user_challenges')
+        .select('*')
+        .eq('user_id', state.profile.userId);
+
+      if (cloudChallenges && cloudChallenges.length > 0) {
+        cloudChallenges.forEach((cc) => {
+          const match = state.challenges.find((c) => c.id === cc.challenge_id);
+          if (match) {
+            match.currentDays = cc.current_days;
+            match.completedDates = cc.completed_dates || [];
+            match.status = cc.status;
+            match.claimed = cc.claimed;
+          }
+        });
+      }
+
+      saveLocalState();
+      updateSyncStatusUI('synced', `🟢 Synced with Supabase (${state.profile.email})`);
+      showToast('☁️ Cloud data restored successfully!', '✓');
+    } catch (err) {
+      console.warn('Cloud hydration warning:', err);
+      updateSyncStatusUI('offline', 'Local Cache Active (Snappy Mode)');
+    }
+  }
+
+  // Automatic Migration of Guest Data to Newly Registered Account
+  async function migrateGuestDataToCloud() {
+    if (!supabaseClient || !state.profile.userId) return;
+
+    try {
+      // 1. Sync Profile & Blueprint
+      await supabaseClient.from('profiles').upsert({
+        id: state.profile.userId,
+        name: state.profile.name,
+        email: state.profile.email,
+        avatar: state.profile.avatar,
+        target_grams: state.target,
+        bonus_xp: state.bonusXp
+      });
+
+      await supabaseClient.from('blueprints').upsert({
+        user_id: state.profile.userId,
+        weight: state.blueprint.weight,
+        unit: state.blueprint.unit,
+        goal_key: state.blueprint.goalKey,
+        activity_key: state.blueprint.activityKey,
+        ratio: state.blueprint.ratio,
+        meals: state.blueprint.meals,
+        is_glp: state.blueprint.isGlp,
+        active: state.blueprint.active
+      });
+
+      // 2. Sync Existing Logs
+      if (state.logs.length > 0) {
+        const logPayloads = state.logs.map((l) => ({
+          id: l.id,
+          user_id: state.profile.userId,
+          grams: l.grams,
+          name: l.name,
+          timestamp: l.timestamp,
+          date_str: l.dateStr,
+          meal_slot: l.mealSlot || 0
+        }));
+        await supabaseClient.from('protein_logs').upsert(logPayloads);
+      }
+
+      // 3. Sync Challenges
+      if (state.challenges.length > 0) {
+        const challengePayloads = state.challenges.map((c) => ({
+          user_id: state.profile.userId,
+          challenge_id: c.id,
+          current_days: c.currentDays,
+          completed_dates: c.completedDates,
+          status: c.status,
+          claimed: c.claimed
+        }));
+        await supabaseClient.from('user_challenges').upsert(challengePayloads);
+      }
+
+      showToast('✨ Local history migrated to your Cloud account!', '☁️');
+    } catch (e) {
+      console.warn('Guest migration notice:', e);
+    }
+  }
+
+  // --- 4. TIME & DATE HELPERS ---
   function getTodayDateStr() {
     const d = new Date();
     const year = d.getFullYear();
@@ -168,7 +458,7 @@
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
-  // --- 4. HAPTICS & AUDIO FEEDBACK ---
+  // --- 5. HAPTICS & AUDIO FEEDBACK ---
   function playHaptic() {
     if ('vibrate' in navigator) {
       try { navigator.vibrate(30); } catch (e) {}
@@ -215,7 +505,7 @@
     } catch (e) {}
   }
 
-  // --- 5. CONFETTI CELEBRATION ---
+  // --- 6. CONFETTI CELEBRATION ---
   function triggerCelebration() {
     const canvas = document.getElementById('confetti-canvas');
     if (!canvas) return;
@@ -273,7 +563,7 @@
     render();
   }
 
-  // --- 6. TOAST NOTIFICATIONS ---
+  // --- 7. TOAST NOTIFICATIONS ---
   function showToast(message, iconSvg = '✓') {
     const toastContainer = document.getElementById('toast-container');
     if (!toastContainer) return;
@@ -289,7 +579,7 @@
     }, 2500);
   }
 
-  // --- 7. CORE LOGS & STREAK ---
+  // --- 8. CORE LOGS & STREAK ---
   function getTodayLogs() {
     const today = getTodayDateStr();
     return state.logs.filter((log) => log.dateStr === today);
@@ -330,7 +620,7 @@
     return streak;
   }
 
-  // --- 8. MEAL NAMES HELPER ---
+  // --- 9. MEAL NAMES HELPER ---
   function getMealSlotNames(numMeals) {
     if (numMeals === 2) return ['Lunch (Meal 1)', 'Dinner (Meal 2)'];
     if (numMeals === 4) return ['Breakfast (Meal 1)', 'Lunch (Meal 2)', 'Snack (Meal 3)', 'Dinner (Meal 4)'];
@@ -339,7 +629,7 @@
     return ['Breakfast (Meal 1)', 'Lunch (Meal 2)', 'Dinner (Meal 3)'];
   }
 
-  // --- 9. DYNAMIC MEAL BREAKOUT ALLOCATION ENGINE ---
+  // --- 10. DYNAMIC MEAL BREAKOUT ALLOCATION ENGINE ---
   function computeMealBreakout() {
     const numMeals = Math.min(6, Math.max(2, state.blueprint.meals || 3));
     const slotNames = getMealSlotNames(numMeals);
@@ -495,7 +785,7 @@
     }
   }
 
-  // --- 10. GOAL-SPECIFIC RESCUE COACH & SMART BRIDGES ---
+  // --- 11. GOAL-SPECIFIC RESCUE COACH & SMART BRIDGES ---
   const RESCUE_CONFIGS = {
     'glp': {
       themeClass: 'glp-theme',
@@ -562,7 +852,6 @@
     const target = state.target;
     const remaining = Math.max(0, target - totalLogged);
 
-    // Only show if user has not met target and has at least some deficit
     if (remaining <= 0) {
       rescueCard.style.display = 'none';
       return;
@@ -609,7 +898,7 @@
     });
   }
 
-  // --- 11. ACTIVE CHALLENGE WIDGET ON MAIN DASHBOARD ---
+  // --- 12. ACTIVE CHALLENGE WIDGET ON DASHBOARD ---
   function renderActiveChallengeWidget() {
     const widget = document.getElementById('active-challenge-widget');
     if (!widget) return;
@@ -657,7 +946,7 @@
     };
   }
 
-  // --- 12. PROTEIN RANKS & XP ENGINE ---
+  // --- 13. PROTEIN RANKS & XP ENGINE ---
   function computeTotalLifetimeXP() {
     const totalGramsLogged = state.logs.reduce((sum, l) => sum + l.grams, 0);
     return totalGramsLogged + state.bonusXp;
@@ -677,7 +966,7 @@
     }
   }
 
-  // --- 13. HABIT CHALLENGES ENGINE ---
+  // --- 14. HABIT CHALLENGES ENGINE ---
   function evaluateChallengesOnLog(newLog) {
     const today = getTodayDateStr();
     const todayTotal = getTodayTotal();
@@ -702,6 +991,13 @@
         } else {
           showToast(`☀️ Day ${c1.currentDays} of 3 completed for Breakfast Challenge!`, '🍳');
         }
+        enqueueCloudMutation('user_challenges', 'UPSERT', {
+          challenge_id: c1.id,
+          current_days: c1.currentDays,
+          completed_dates: c1.completedDates,
+          status: c1.status,
+          claimed: c1.claimed
+        });
         stateChanged = true;
       }
     }
@@ -717,6 +1013,13 @@
         playChime('victory');
         showToast('🏆 7-Day Titan Challenge COMPLETED!', '⭐');
       }
+      enqueueCloudMutation('user_challenges', 'UPSERT', {
+        challenge_id: c2.id,
+        current_days: c2.currentDays,
+        completed_dates: c2.completedDates,
+        status: c2.status,
+        claimed: c2.claimed
+      });
       stateChanged = true;
     }
 
@@ -731,6 +1034,13 @@
         playChime('victory');
         showToast('💉 GLP-1 Muscle Guard Quest COMPLETED!', '⭐');
       }
+      enqueueCloudMutation('user_challenges', 'UPSERT', {
+        challenge_id: c3.id,
+        current_days: c3.currentDays,
+        completed_dates: c3.completedDates,
+        status: c3.status,
+        claimed: c3.claimed
+      });
       stateChanged = true;
     }
 
@@ -740,18 +1050,25 @@
       c4.completedDates.push(today);
       c4.currentDays = 1;
       c4.status = 'completed';
+      enqueueCloudMutation('user_challenges', 'UPSERT', {
+        challenge_id: c4.id,
+        current_days: c4.currentDays,
+        completed_dates: c4.completedDates,
+        status: c4.status,
+        claimed: c4.claimed
+      });
       stateChanged = true;
       showToast('🦁 160g Beast Mode Challenge unlocked & completed!', '🔥');
     }
 
     if (stateChanged) {
-      saveState();
+      saveLocalState();
       renderChallenges();
       renderActiveChallengeWidget();
     }
   }
 
-  // --- 14. DOM RENDERING ---
+  // --- 15. DOM RENDERING ---
   const ringProgress = document.getElementById('ring-progress');
   const currentGramsVal = document.getElementById('current-grams-val');
   const targetGramsVal = document.getElementById('target-grams-val');
@@ -907,7 +1224,7 @@
     });
   }
 
-  // --- 15. CORE ACTION HANDLERS ---
+  // --- 16. CORE ACTION HANDLERS (OPTIMISTIC & SNAPPY) ---
   function logProtein(grams, name = '', mealSlot = null) {
     const g = parseInt(grams, 10);
     if (isNaN(g) || g <= 0) return;
@@ -923,12 +1240,23 @@
       mealSlot: chosenSlot
     };
 
+    // 1. Immediate Local State Write (<1ms Snappiness)
     state.logs.push(newLog);
-    saveState();
+    saveLocalState();
     playHaptic();
     playChime('pop');
     showToast(`+${g}g ${newLog.name} logged!`);
     
+    // 2. Background Cloud Sync (Zero lag)
+    enqueueCloudMutation('protein_logs', 'INSERT', {
+      id: newLog.id,
+      grams: newLog.grams,
+      name: newLog.name,
+      timestamp: newLog.timestamp,
+      date_str: newLog.dateStr,
+      meal_slot: newLog.mealSlot
+    });
+
     evaluateChallengesOnLog(newLog);
     updateDashboard();
   }
@@ -937,13 +1265,16 @@
     const idx = state.logs.findIndex((l) => l.id === id);
     if (idx !== -1) {
       const removed = state.logs.splice(idx, 1)[0];
-      saveState();
+      saveLocalState();
       showToast(`Removed ${removed.grams}g entry`, '🗑️');
+
+      // Async Cloud Delete
+      enqueueCloudMutation('protein_logs', 'DELETE', { id: removed.id });
       updateDashboard();
     }
   }
 
-  // --- 16. CHALLENGES & COMMITMENT RENDERING ---
+  // --- 17. CHALLENGES & COMMITMENT RENDERING ---
   function renderChallenges() {
     const list = document.getElementById('challenges-list');
     if (!list) return;
@@ -1011,10 +1342,17 @@
       if (joinBtn) {
         joinBtn.addEventListener('click', () => {
           ch.status = 'committed';
-          saveState();
+          saveLocalState();
           playChime('victory');
           triggerCelebration();
           showToast(`🔥 Committed to ${ch.title}!`, '🚀');
+          enqueueCloudMutation('user_challenges', 'UPSERT', {
+            challenge_id: ch.id,
+            current_days: ch.currentDays,
+            completed_dates: ch.completedDates,
+            status: ch.status,
+            claimed: ch.claimed
+          });
           renderChallenges();
           renderActiveChallengeWidget();
         });
@@ -1025,10 +1363,21 @@
         claimBtn.addEventListener('click', () => {
           ch.claimed = true;
           state.bonusXp += ch.xpReward;
-          saveState();
+          saveLocalState();
           playChime('quest');
           triggerCelebration();
           showToast(`🏆 Claimed +${ch.xpReward} XP for ${ch.title}!`, '⭐');
+          enqueueCloudMutation('user_challenges', 'UPSERT', {
+            challenge_id: ch.id,
+            current_days: ch.currentDays,
+            completed_dates: ch.completedDates,
+            status: ch.status,
+            claimed: ch.claimed
+          });
+          enqueueCloudMutation('profiles', 'UPSERT', {
+            id: state.profile.userId,
+            bonus_xp: state.bonusXp
+          });
           renderChallenges();
           renderInsights();
           renderActiveChallengeWidget();
@@ -1041,8 +1390,15 @@
           ch.status = 'available';
           ch.currentDays = 0;
           ch.completedDates = [];
-          saveState();
+          saveLocalState();
           showToast(`Reset ${ch.title}`);
+          enqueueCloudMutation('user_challenges', 'UPSERT', {
+            challenge_id: ch.id,
+            current_days: 0,
+            completed_dates: [],
+            status: 'available',
+            claimed: false
+          });
           renderChallenges();
           renderActiveChallengeWidget();
         });
@@ -1052,7 +1408,7 @@
     });
   }
 
-  // --- 17. INSIGHTS & RANKS RENDERING ---
+  // --- 18. INSIGHTS & RANKS RENDERING ---
   function renderInsights() {
     const xp = computeTotalLifetimeXP();
     const rank = getRankDetails(xp);
@@ -1148,9 +1504,9 @@
     });
   }
 
-  // --- 18. INTERACTIVE SCIENTIFIC ONBOARDING & SETUP ENGINE ---
+  // --- 19. INTERACTIVE SCIENTIFIC ONBOARDING & SETUP ENGINE ---
   let wizardData = {
-    step: 0, // 0 = Welcome Hero Page, 1..5 = Questions & Reveal
+    step: 0,
     goal: state.blueprint.goalKey || 'muscle',
     goalRatio: state.blueprint.ratio || 2.0,
     isGlp: state.blueprint.isGlp || false,
@@ -1252,7 +1608,6 @@
       return;
     }
 
-    // Step 1 to 5
     if (progressTrack) progressTrack.style.display = 'block';
     if (footerNav) footerNav.style.display = 'flex';
 
@@ -1268,7 +1623,6 @@
     if (prevBtn) prevBtn.textContent = wizardData.step === 1 ? '← Tour' : '← Back';
     if (nextBtn) nextBtn.style.display = wizardData.step === 5 ? 'none' : 'inline-flex';
 
-    // Step 1: Active Goal Card Sync
     document.querySelectorAll('.wiz-goal-choice').forEach((card) => {
       if (card.dataset.goal === wizardData.goal) {
         card.classList.add('selected');
@@ -1277,7 +1631,6 @@
       }
     });
 
-    // Step 2: Active Activity Card Sync
     document.querySelectorAll('.wiz-activity-choice').forEach((card) => {
       if (card.dataset.activity === wizardData.activity) {
         card.classList.add('selected');
@@ -1286,7 +1639,6 @@
       }
     });
 
-    // Step 3 (Weight) live sync
     const weightReadout = document.getElementById('wiz-weight-num');
     const weightRange = document.getElementById('wiz-weight-range');
     if (weightReadout) weightReadout.textContent = `${wizardData.weight} ${wizardData.unit}`;
@@ -1296,7 +1648,6 @@
       weightRange.value = wizardData.weight;
     }
 
-    // Step 4 (Meals) sync
     document.querySelectorAll('.wiz-meal-btn').forEach((btn) => {
       if (parseInt(btn.dataset.meals, 10) === wizardData.meals) {
         btn.classList.add('active');
@@ -1305,7 +1656,6 @@
       }
     });
 
-    // Step 5 (Reveal Calculation)
     if (wizardData.step === 5) {
       const calc = computeWizardTarget();
       const targetNumEl = document.getElementById('reveal-target-grams');
@@ -1321,7 +1671,6 @@
   }
 
   function initWizardEvents() {
-    // Stage 0: Welcome Start Button
     const startQuizBtn = document.getElementById('start-onboarding-quiz-btn');
     if (startQuizBtn) {
       startQuizBtn.addEventListener('click', () => {
@@ -1331,7 +1680,6 @@
       });
     }
 
-    // Step 1: Goal Selection (Delegated and Direct)
     function handleGoalSelect(goalKey, isGlp) {
       wizardData.goal = goalKey;
       wizardData.isGlp = isGlp === true || isGlp === 'true';
@@ -1353,7 +1701,6 @@
       });
     }
 
-    // Step 2: Activity Selection (Delegated and Direct)
     function handleActivitySelect(activityKey) {
       wizardData.activity = activityKey;
       renderWizardStep();
@@ -1374,7 +1721,6 @@
       });
     }
 
-    // Step 3: Unit & Weight Steppers
     const unitKgBtn = document.getElementById('wiz-unit-kg');
     const unitLbsBtn = document.getElementById('wiz-unit-lbs');
     const weightRange = document.getElementById('wiz-weight-range');
@@ -1416,7 +1762,6 @@
       });
     });
 
-    // Step 4: Meal Count Buttons
     document.querySelectorAll('.wiz-meal-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         wizardData.meals = parseInt(btn.dataset.meals, 10);
@@ -1429,7 +1774,6 @@
       });
     });
 
-    // Next / Prev Buttons
     const prevBtn = document.getElementById('wizard-prev-btn');
     const nextBtn = document.getElementById('wizard-next-btn');
 
@@ -1451,7 +1795,6 @@
       });
     }
 
-    // Step 5: Activate Button
     const activateWizardBtn = document.getElementById('wizard-activate-btn');
     if (activateWizardBtn) {
       activateWizardBtn.addEventListener('click', () => {
@@ -1468,16 +1811,33 @@
           isGlp: wizardData.isGlp
         };
 
-        // Commit user to starter challenge
         const c1 = state.challenges.find((c) => c.id === 'c1');
         if (c1) c1.status = 'committed';
 
         localStorage.setItem(STORAGE_KEYS.ONBOARDED_V5, 'true');
-        saveState();
+        saveLocalState();
         playChime('victory');
         triggerCelebration();
         closeModal(document.getElementById('wizard-modal'));
         showToast(`⚡ Scientific Blueprint Active: ${calc.dailyTarget}g Target!`, '🚀');
+
+        // Async Cloud Sync
+        enqueueCloudMutation('blueprints', 'UPSERT', {
+          weight: state.blueprint.weight,
+          unit: state.blueprint.unit,
+          goal_key: state.blueprint.goalKey,
+          activity_key: state.blueprint.activityKey,
+          ratio: state.blueprint.ratio,
+          meals: state.blueprint.meals,
+          is_glp: state.blueprint.isGlp,
+          active: true
+        });
+
+        enqueueCloudMutation('profiles', 'UPSERT', {
+          id: state.profile.userId,
+          target_grams: state.target
+        });
+
         updateDashboard();
       });
     }
@@ -1495,7 +1855,7 @@
     }
   }
 
-  // --- 19. PRESETS & FOOD CATALOG MANAGER ---
+  // --- 20. PRESETS & FOOD CATALOG MANAGER ---
   function renderPresetsEditor() {
     const list = document.getElementById('presets-edit-list');
     const catalogContainer = document.getElementById('catalog-chips-container');
@@ -1564,10 +1924,20 @@
 
         if (newPresets.length > 0) {
           state.presets = newPresets;
-          saveState();
+          saveLocalState();
           renderPresets();
           closeModal(document.getElementById('presets-modal'));
           showToast('Custom Presets saved successfully!');
+
+          // Sync presets to cloud
+          newPresets.forEach((p) => {
+            enqueueCloudMutation('custom_presets', 'UPSERT', {
+              id: p.id,
+              name: p.name,
+              grams: p.grams,
+              tag: p.tag
+            });
+          });
         } else {
           showToast('Please have at least 1 preset button', '⚠️');
         }
@@ -1575,53 +1945,313 @@
     }
   }
 
-  // --- 20. USER PROFILE & AUTH ---
+  // --- 21. SUPABASE AUTH & CLOUD PROFILE MANAGER ---
+  function renderAuthViews(activeTab = 'profile') {
+    const tabs = {
+      profile: document.getElementById('tab-auth-profile'),
+      signin: document.getElementById('tab-auth-signin'),
+      signup: document.getElementById('tab-auth-signup'),
+      config: document.getElementById('tab-auth-config')
+    };
+
+    const views = {
+      profile: document.getElementById('auth-view-profile'),
+      signin: document.getElementById('auth-view-signin'),
+      signup: document.getElementById('auth-view-signup'),
+      config: document.getElementById('auth-view-config')
+    };
+
+    Object.keys(tabs).forEach((key) => {
+      if (tabs[key]) {
+        if (key === activeTab) tabs[key].classList.add('active');
+        else tabs[key].classList.remove('active');
+      }
+      if (views[key]) {
+        views[key].style.display = key === activeTab ? 'flex' : 'none';
+      }
+    });
+
+    const errorMsg = document.getElementById('auth-error-msg');
+    if (errorMsg) errorMsg.style.display = 'none';
+
+    // Populate user profile info
+    const nameInput = document.getElementById('auth-name-input');
+    const avatarDisplay = document.getElementById('profile-avatar-display');
+    const userEmailLabel = document.getElementById('auth-logged-user-email');
+    const signOutBtn = document.getElementById('sign-out-btn');
+    const userAvatarHeaderBtn = document.getElementById('user-avatar-btn');
+
+    if (nameInput) nameInput.value = state.profile.name;
+    if (avatarDisplay) avatarDisplay.textContent = state.profile.avatar;
+    if (userAvatarHeaderBtn) userAvatarHeaderBtn.textContent = state.profile.avatar;
+
+    if (userEmailLabel) {
+      userEmailLabel.textContent = state.profile.isLoggedIn 
+        ? `${state.profile.email}` 
+        : 'Guest Mode (Offline Cache Active)';
+    }
+
+    if (signOutBtn) {
+      signOutBtn.style.display = state.profile.isLoggedIn ? 'block' : 'none';
+    }
+
+    // Populate Supabase config inputs
+    const urlInput = document.getElementById('supabase-url-input');
+    const anonInput = document.getElementById('supabase-anon-input');
+    if (urlInput) urlInput.value = state.supabaseConfig.url || '';
+    if (anonInput) anonInput.value = state.supabaseConfig.anonKey || '';
+  }
+
+  function showAuthError(msg) {
+    const errorEl = document.getElementById('auth-error-msg');
+    if (errorEl) {
+      errorEl.textContent = msg;
+      errorEl.style.display = 'block';
+    }
+  }
+
   function initProfileAndAuth() {
     const profileBtn = document.getElementById('user-avatar-btn');
     const profileModal = document.getElementById('profile-modal');
-    const authNameInput = document.getElementById('auth-name-input');
-    const authEmailInput = document.getElementById('auth-email-input');
-    const avatarDisplay = document.getElementById('profile-avatar-display');
-    const saveProfileBtn = document.getElementById('save-profile-btn');
-    const avatarSelectorButtons = document.querySelectorAll('.avatar-option-btn');
 
-    if (profileBtn && state.profile) {
-      profileBtn.textContent = state.profile.avatar || '⚡';
-    }
-
-    function syncProfileInputs() {
-      if (authNameInput) authNameInput.value = state.profile.name;
-      if (authEmailInput) authEmailInput.value = state.profile.email;
-      if (avatarDisplay) avatarDisplay.textContent = state.profile.avatar;
-    }
+    // Tab buttons
+    ['profile', 'signin', 'signup', 'config'].forEach((tabKey) => {
+      const btn = document.getElementById(`tab-auth-${tabKey}`);
+      if (btn) {
+        btn.addEventListener('click', () => renderAuthViews(tabKey));
+      }
+    });
 
     if (profileBtn) {
       profileBtn.addEventListener('click', () => {
-        syncProfileInputs();
+        renderAuthViews(state.profile.isLoggedIn ? 'profile' : 'signin');
         openModal(profileModal);
       });
     }
 
-    avatarSelectorButtons.forEach((btn) => {
+    // Avatar selector buttons
+    document.querySelectorAll('.avatar-option-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         state.profile.avatar = btn.dataset.avatar;
-        if (avatarDisplay) avatarDisplay.textContent = btn.dataset.avatar;
-        if (profileBtn) profileBtn.textContent = btn.dataset.avatar;
+        renderAuthViews('profile');
       });
     });
 
+    // Save Profile button
+    const saveProfileBtn = document.getElementById('save-profile-btn');
     if (saveProfileBtn) {
       saveProfileBtn.addEventListener('click', () => {
-        state.profile.name = authNameInput.value.trim() || 'Athlete';
-        state.profile.email = authEmailInput.value.trim() || 'athlete@protein.local';
-        saveState();
+        const nameInput = document.getElementById('auth-name-input');
+        if (nameInput) {
+          state.profile.name = nameInput.value.trim() || 'Athlete';
+        }
+        saveLocalState();
+        enqueueCloudMutation('profiles', 'UPSERT', {
+          id: state.profile.userId,
+          name: state.profile.name,
+          avatar: state.profile.avatar
+        });
+        showToast('Profile updated & saved!', '✓');
         closeModal(profileModal);
-        showToast('Profile updated & synced to Cloud!', '☁️');
+      });
+    }
+
+    // Force Sync button
+    const forceSyncBtn = document.getElementById('force-cloud-sync-btn');
+    if (forceSyncBtn) {
+      forceSyncBtn.addEventListener('click', async () => {
+        if (!state.supabaseConfig.url || !state.supabaseConfig.anonKey) {
+          renderAuthViews('config');
+          showToast('Please enter your Supabase Project URL & Anon Key first', '⚠️');
+          return;
+        }
+        if (!state.profile.isLoggedIn) {
+          renderAuthViews('signin');
+          showToast('Please sign in to sync with Supabase', '🔑');
+          return;
+        }
+        await hydrateFromCloud();
+        await flushSyncQueue();
+      });
+    }
+
+    // Sign In Action
+    const submitSignInBtn = document.getElementById('submit-signin-btn');
+    if (submitSignInBtn) {
+      submitSignInBtn.addEventListener('click', async () => {
+        const email = document.getElementById('signin-email-input').value.trim();
+        const password = document.getElementById('signin-password-input').value;
+
+        if (!email || !password) {
+          showAuthError('Please enter both email and password.');
+          return;
+        }
+
+        if (!supabaseClient) {
+          renderAuthViews('config');
+          showAuthError('Please configure your Supabase Project URL and Anon Key first.');
+          return;
+        }
+
+        submitSignInBtn.disabled = true;
+        submitSignInBtn.textContent = 'Signing in...';
+
+        try {
+          const { data, error } = await supabaseClient.auth.signInWithPassword({
+            email,
+            password
+          });
+
+          if (error) throw error;
+
+          showToast(`Welcome back, ${data.user.email}!`, '👋');
+          closeModal(profileModal);
+        } catch (err) {
+          showAuthError(err.message || 'Failed to sign in.');
+        } finally {
+          submitSignInBtn.disabled = false;
+          submitSignInBtn.textContent = '🔑 Sign In to Supabase';
+        }
+      });
+    }
+
+    // Sign Up Action
+    const submitSignUpBtn = document.getElementById('submit-signup-btn');
+    if (submitSignUpBtn) {
+      submitSignUpBtn.addEventListener('click', async () => {
+        const name = document.getElementById('signup-name-input').value.trim();
+        const email = document.getElementById('signup-email-input').value.trim();
+        const password = document.getElementById('signup-password-input').value;
+
+        if (!email || !password) {
+          showAuthError('Please enter an email and password.');
+          return;
+        }
+
+        if (password.length < 6) {
+          showAuthError('Password must be at least 6 characters.');
+          return;
+        }
+
+        if (!supabaseClient) {
+          renderAuthViews('config');
+          showAuthError('Please configure your Supabase Project URL and Anon Key first.');
+          return;
+        }
+
+        submitSignUpBtn.disabled = true;
+        submitSignUpBtn.textContent = 'Creating account...';
+
+        try {
+          const { data, error } = await supabaseClient.auth.signUp({
+            email,
+            password,
+            options: {
+              data: {
+                name: name || 'Athlete',
+                avatar: state.profile.avatar
+              }
+            }
+          });
+
+          if (error) throw error;
+
+          if (data.session && data.user) {
+            state.profile.isLoggedIn = true;
+            state.profile.userId = data.user.id;
+            state.profile.email = data.user.email;
+            state.profile.name = name || state.profile.name;
+            saveLocalState();
+            await migrateGuestDataToCloud();
+            showToast('Account created & data synced!', '🚀');
+            closeModal(profileModal);
+          } else {
+            showToast('Confirmation email sent! Please check your inbox.', '📧');
+            renderAuthViews('signin');
+          }
+        } catch (err) {
+          showAuthError(err.message || 'Failed to create account.');
+        } finally {
+          submitSignUpBtn.disabled = false;
+          submitSignUpBtn.textContent = '🚀 Create Account & Sync Data';
+        }
+      });
+    }
+
+    // Sign Out Action
+    const signOutBtn = document.getElementById('sign-out-btn');
+    if (signOutBtn) {
+      signOutBtn.addEventListener('click', async () => {
+        if (supabaseClient) {
+          await supabaseClient.auth.signOut();
+        }
+        state.profile.isLoggedIn = false;
+        state.profile.userId = null;
+        state.profile.email = '';
+        saveLocalState();
+        showToast('Signed out of Supabase');
+        renderAuthViews('signin');
+      });
+    }
+
+    // Save Supabase Configuration Action
+    const saveConfigBtn = document.getElementById('save-supabase-config-btn');
+    if (saveConfigBtn) {
+      saveConfigBtn.addEventListener('click', () => {
+        const url = document.getElementById('supabase-url-input').value.trim();
+        const anonKey = document.getElementById('supabase-anon-input').value.trim();
+
+        if (!url || !anonKey) {
+          showAuthError('Please provide both Supabase URL and Anon Key.');
+          return;
+        }
+
+        state.supabaseConfig = { url, anonKey };
+        localStorage.setItem(STORAGE_KEYS.SUPABASE_CONFIG, JSON.stringify(state.supabaseConfig));
+        initSupabase();
+        showToast('Supabase connection settings saved!', '✓');
+        renderAuthViews('signin');
+      });
+    }
+
+    // Test Supabase Connection Action
+    const testConnBtn = document.getElementById('test-supabase-conn-btn');
+    if (testConnBtn) {
+      testConnBtn.addEventListener('click', async () => {
+        const url = document.getElementById('supabase-url-input').value.trim();
+        const anonKey = document.getElementById('supabase-anon-input').value.trim();
+
+        if (!url || !anonKey) {
+          showAuthError('Enter both Supabase URL and Anon Key to test.');
+          return;
+        }
+
+        testConnBtn.disabled = true;
+        testConnBtn.textContent = 'Testing...';
+
+        try {
+          const testClient = window.supabase.createClient(url, anonKey);
+          const { error } = await testClient.from('profiles').select('id').limit(1);
+          
+          if (error && error.code !== 'PGRST116' && error.message.indexOf('JWT') === -1) {
+            showAuthError(`Connection test notice: ${error.message}`);
+          } else {
+            showToast('✅ Supabase project connected successfully!', '⚡');
+            state.supabaseConfig = { url, anonKey };
+            localStorage.setItem(STORAGE_KEYS.SUPABASE_CONFIG, JSON.stringify(state.supabaseConfig));
+            initSupabase();
+          }
+        } catch (err) {
+          showAuthError(`Failed to connect: ${err.message}`);
+        } finally {
+          testConnBtn.disabled = false;
+          testConnBtn.textContent = 'Test Connection';
+        }
       });
     }
   }
 
-  // --- 21. NAVIGATION & TAB SWITCHING ---
+  // --- 22. NAVIGATION & TAB SWITCHING ---
   function initNavigation() {
     const tabs = document.querySelectorAll('.nav-tab');
     const views = {
@@ -1653,7 +2283,7 @@
     });
   }
 
-  // --- 22. MODALS ENGINE ---
+  // --- 23. MODALS ENGINE ---
   function openModal(modalEl) {
     if (modalEl) modalEl.classList.add('active');
   }
@@ -1681,7 +2311,6 @@
     const editBlueprintFromCard = document.getElementById('edit-blueprint-from-card');
     const wizardModal = document.getElementById('wizard-modal');
 
-    // Launch Onboarding & Setup Quiz
     function launchOnboardingFlow(startStep = 0) {
       wizardData.step = startStep;
       renderWizardStep();
@@ -1718,14 +2347,14 @@
     }
   }
 
-  // --- 23. UTILS ---
+  // --- 24. UTILS ---
   function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
   }
 
-  // --- 24. INITIALIZATION ---
+  // --- 25. INITIALIZATION ---
   function init() {
     const customForm = document.getElementById('quick-add-form');
     const proteinInput = document.getElementById('protein-amount-input');
@@ -1759,12 +2388,19 @@
       });
     });
 
+    // Handle online / reconnect auto-sync
+    window.addEventListener('online', () => {
+      showToast('🟢 Back online! Syncing data...', '☁️');
+      flushSyncQueue();
+    });
+
     initNavigation();
     initModals();
     initWizardEvents();
     renderPresets();
     updateDashboard();
     initProfileAndAuth();
+    initSupabase();
     renderChallenges();
     checkFirstTimeOnboarding();
   }
