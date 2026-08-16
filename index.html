@@ -135,6 +135,11 @@
         <!-- Rendered dynamically by app.js -->
       </section>
 
+      <!-- SMART AI COACH & PROACTIVE NUDGES BANNER -->
+      <section class="ai-coach-banner" id="ai-coach-banner" style="display: none;" aria-label="AI Smart Coach Nudges">
+        <!-- Rendered dynamically by app.js -->
+      </section>
+
       <!-- GOAL-SPECIFIC PROTEIN RESCUE COACH & SMART BRIDGES -->
       <section class="rescue-coach-card" id="rescue-coach-card" style="display: none;" aria-label="Protein Rescue Coach">
         <!-- Rendered dynamically by app.js -->
@@ -291,6 +296,30 @@
             <div style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Goal Hit Rate</div>
             <div id="goal-hit-rate-label" style="font-size: 1.125rem; font-weight: 800; font-family: var(--font-mono); color: var(--amber-400); margin-top: 2px;">-- %</div>
           </div>
+        </div>
+      </div>
+
+      <!-- AI REFLECTION STUDIO: WEEKLY & MONTHLY SUMMARIES -->
+      <div class="ai-reflection-card" id="ai-reflection-card">
+        <div class="section-header" style="padding:0;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span class="ai-badge">🤖 Gemini AI</span>
+            <h2 class="section-title">AI Reflection Studio</h2>
+          </div>
+          <button type="button" class="btn-primary" id="generate-reflection-btn" style="padding: 6px 12px; font-size: 0.75rem;">
+            ✨ Generate AI Report
+          </button>
+        </div>
+
+        <!-- Reflection Period Selector Tabs -->
+        <div class="reflection-period-selector">
+          <button type="button" class="reflection-tab-btn active" id="tab-reflection-weekly">📅 Weekly (Past 7 Days)</button>
+          <button type="button" class="reflection-tab-btn" id="tab-reflection-monthly">📆 Monthly (Past 30 Days)</button>
+        </div>
+
+        <!-- Reflection Content Container -->
+        <div id="ai-reflection-content">
+          <!-- Populated dynamically by app.js -->
         </div>
       </div>
 
@@ -733,6 +762,11 @@
         <div class="auth-input-group">
           <label class="auth-label" for="supabase-anon-input">Supabase Anon Key (Public)</label>
           <input type="password" id="supabase-anon-input" class="auth-input" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." />
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-label" for="gemini-key-input">Google Gemini API Key (Optional)</label>
+          <input type="password" id="gemini-key-input" class="auth-input" placeholder="AIzaSy..." />
         </div>
 
         <div style="display: flex; gap: 8px; margin-top: 4px;">

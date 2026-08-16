@@ -1,6 +1,6 @@
 /**
- * PROTEIN TRACKER - SCIENTIFIC ONBOARDING, SUPABASE CLOUD & CACHE-FIRST SYNC ENGINE
- * Supabase PostgreSQL + Auth (RLS) | Cache-First Optimistic Sync | 5-Step Scientific Quiz | GLP-1 Support
+ * PROTEIN TRACKER - SCIENTIFIC ONBOARDING, SUPABASE CLOUD, AI COACH & CACHE-FIRST SYNC ENGINE
+ * Supabase PostgreSQL + Auth (RLS) | Google Gemini AI Coaching & Nudges | Weekly/Monthly Reports | 5-Step Scientific Quiz
  */
 
 (function () {
@@ -17,8 +17,11 @@
     BONUS_XP: 'pt_bonus_xp',
     ONBOARDED_V5: 'pt_onboarded_tour_v5',
     SUPABASE_CONFIG: 'pt_supabase_config',
+    GEMINI_KEY: 'pt_gemini_api_key',
     SYNC_QUEUE: 'pt_sync_pending_queue',
-    LAST_SYNC: 'pt_last_cloud_sync_time'
+    LAST_SYNC: 'pt_last_cloud_sync_time',
+    AI_REPORTS: 'pt_ai_reports_cache',
+    LATEST_NUDGE: 'pt_latest_ai_nudge'
   };
 
   const DEFAULT_TARGET = 150;
@@ -147,16 +150,19 @@
       url: 'https://ejmrmnihnycxulitgvkv.supabase.co',
       anonKey: 'sb_publishable_PAYdOPuiX2w3DODRZLotVw_Nt_cbDwE'
     })),
-    syncQueue: JSON.parse(localStorage.getItem(STORAGE_KEYS.SYNC_QUEUE) || '[]')
+    geminiKey: localStorage.getItem(STORAGE_KEYS.GEMINI_KEY) || '',
+    syncQueue: JSON.parse(localStorage.getItem(STORAGE_KEYS.SYNC_QUEUE) || '[]'),
+    aiReports: JSON.parse(localStorage.getItem(STORAGE_KEYS.AI_REPORTS) || '{}'),
+    latestNudge: JSON.parse(localStorage.getItem(STORAGE_KEYS.LATEST_NUDGE) || 'null')
   };
 
-  // Ensure default credentials if empty
   if (!state.supabaseConfig.url) {
     state.supabaseConfig.url = 'https://ejmrmnihnycxulitgvkv.supabase.co';
     state.supabaseConfig.anonKey = 'sb_publishable_PAYdOPuiX2w3DODRZLotVw_Nt_cbDwE';
   }
 
   let activeSelectedMealSlot = 0;
+  let activeReflectionPeriod = 'weekly';
   let supabaseClient = null;
 
   function saveLocalState() {
@@ -167,7 +173,13 @@
     localStorage.setItem(STORAGE_KEYS.BONUS_XP, state.bonusXp);
     localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(state.profile));
     localStorage.setItem(STORAGE_KEYS.BLUEPRINT, JSON.stringify(state.blueprint));
+    localStorage.setItem(STORAGE_KEYS.SUPABASE_CONFIG, JSON.stringify(state.supabaseConfig));
+    localStorage.setItem(STORAGE_KEYS.GEMINI_KEY, state.geminiKey);
     localStorage.setItem(STORAGE_KEYS.SYNC_QUEUE, JSON.stringify(state.syncQueue));
+    localStorage.setItem(STORAGE_KEYS.AI_REPORTS, JSON.stringify(state.aiReports));
+    if (state.latestNudge) {
+      localStorage.setItem(STORAGE_KEYS.LATEST_NUDGE, JSON.stringify(state.latestNudge));
+    }
   }
 
   // --- 3. SUPABASE CLIENT & CLOUD SYNC ENGINE ---
@@ -177,7 +189,6 @@
       try {
         supabaseClient = window.supabase.createClient(cfg.url, cfg.anonKey);
         
-        // Listen to Auth State Changes
         supabaseClient.auth.onAuthStateChange(async (event, session) => {
           if (session && session.user) {
             state.profile.isLoggedIn = true;
@@ -192,9 +203,7 @@
             saveLocalState();
             updateSyncStatusUI('synced', `Connected as ${session.user.email}`);
             
-            // Sync / Hydrate cloud data
             await hydrateFromCloud();
-            // Process any pending offline mutations
             flushSyncQueue();
           } else {
             state.profile.isLoggedIn = false;
@@ -225,10 +234,9 @@
     text.textContent = message;
   }
 
-  // Optimistic Async Mutation Queue
   async function enqueueCloudMutation(table, action, data) {
     if (!state.profile.isLoggedIn || !supabaseClient || !state.profile.userId) {
-      return; // Data safely saved in local cache for guest
+      return;
     }
 
     const job = {
@@ -284,14 +292,13 @@
     }
   }
 
-  // Hydrate & Merge Cloud Data into Local Cache on Login
   async function hydrateFromCloud() {
     if (!supabaseClient || !state.profile.userId) return;
 
     try {
       updateSyncStatusUI('syncing', 'Restoring cloud data...');
 
-      // 1. Fetch Profile
+      // 1. Profile
       const { data: profileData } = await supabaseClient
         .from('profiles')
         .select('*')
@@ -305,7 +312,7 @@
         state.bonusXp = profileData.bonus_xp || state.bonusXp;
       }
 
-      // 2. Fetch Blueprint
+      // 2. Blueprint
       const { data: blueprintData } = await supabaseClient
         .from('blueprints')
         .select('*')
@@ -325,7 +332,7 @@
         };
       }
 
-      // 3. Fetch Protein Logs
+      // 3. Protein Logs
       const { data: cloudLogs } = await supabaseClient
         .from('protein_logs')
         .select('*')
@@ -348,7 +355,7 @@
         });
       }
 
-      // 4. Fetch Custom Presets
+      // 4. Custom Presets
       const { data: cloudPresets } = await supabaseClient
         .from('custom_presets')
         .select('*')
@@ -363,7 +370,7 @@
         }));
       }
 
-      // 5. Fetch Challenges Progression
+      // 5. Challenges Progression
       const { data: cloudChallenges } = await supabaseClient
         .from('user_challenges')
         .select('*')
@@ -381,6 +388,31 @@
         });
       }
 
+      // 6. AI Reports
+      const { data: cloudReports } = await supabaseClient
+        .from('ai_reports')
+        .select('*')
+        .eq('user_id', state.profile.userId)
+        .order('created_at', { ascending: false });
+
+      if (cloudReports && cloudReports.length > 0) {
+        cloudReports.forEach((cr) => {
+          state.aiReports[cr.period_type] = {
+            periodType: cr.period_type,
+            grade: cr.goal_hit_rate >= 85 ? 'A+' : (cr.goal_hit_rate >= 70 ? 'A' : 'B'),
+            aiSummary: cr.ai_summary,
+            keyWins: cr.key_wins || [],
+            focusAreas: cr.focus_areas || [],
+            recommendedGoalAdjustment: cr.recommended_goal_adjustment,
+            avgDailyProtein: cr.avg_daily_protein,
+            goalHitRate: cr.goal_hit_rate,
+            streakAchieved: cr.streak_achieved,
+            startDate: cr.start_date,
+            endDate: cr.end_date
+          };
+        });
+      }
+
       saveLocalState();
       updateSyncStatusUI('synced', `🟢 Synced with Supabase (${state.profile.email})`);
       showToast('☁️ Cloud data restored successfully!', '✓');
@@ -390,12 +422,10 @@
     }
   }
 
-  // Automatic Migration of Guest Data to Newly Registered Account
   async function migrateGuestDataToCloud() {
     if (!supabaseClient || !state.profile.userId) return;
 
     try {
-      // 1. Sync Profile & Blueprint
       await supabaseClient.from('profiles').upsert({
         id: state.profile.userId,
         name: state.profile.name,
@@ -417,7 +447,6 @@
         active: state.blueprint.active
       });
 
-      // 2. Sync Existing Logs
       if (state.logs.length > 0) {
         const logPayloads = state.logs.map((l) => ({
           id: l.id,
@@ -431,7 +460,6 @@
         await supabaseClient.from('protein_logs').upsert(logPayloads);
       }
 
-      // 3. Sync Challenges
       if (state.challenges.length > 0) {
         const challengePayloads = state.challenges.map((c) => ({
           user_id: state.profile.userId,
@@ -511,7 +539,6 @@
     } catch (e) {}
   }
 
-  // --- 6. CONFETTI CELEBRATION ---
   function triggerCelebration() {
     const canvas = document.getElementById('confetti-canvas');
     if (!canvas) return;
@@ -569,7 +596,6 @@
     render();
   }
 
-  // --- 7. TOAST NOTIFICATIONS ---
   function showToast(message, iconSvg = '✓') {
     const toastContainer = document.getElementById('toast-container');
     if (!toastContainer) return;
@@ -585,7 +611,6 @@
     }, 2500);
   }
 
-  // --- 8. CORE LOGS & STREAK ---
   function getTodayLogs() {
     const today = getTodayDateStr();
     return state.logs.filter((log) => log.dateStr === today);
@@ -626,7 +651,421 @@
     return streak;
   }
 
-  // --- 9. MEAL NAMES HELPER ---
+  // --- 6. AI SMART COACH & INTELLIGENT NUDGE ENGINE ---
+  async function analyzeTrackingAndNudge() {
+    const dailyTotals = {};
+    state.logs.forEach((log) => {
+      dailyTotals[log.dateStr] = (dailyTotals[log.dateStr] || 0) + log.grams;
+    });
+
+    // Check consecutive days under target (past 3-5 days)
+    let daysUnderTarget = 0;
+    for (let i = 1; i <= 4; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dayNum = String(d.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${m}-${dayNum}`;
+      const total = dailyTotals[dateStr] || 0;
+      if (total < state.target) {
+        daysUnderTarget++;
+      } else {
+        break;
+      }
+    }
+
+    const streak = calculateStreak();
+    const history = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dayNum = String(d.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${m}-${dayNum}`;
+      history.push({ date: dateStr, grams: dailyTotals[dateStr] || 0 });
+    }
+
+    try {
+      const res = await fetch('/api/ai/coach', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-gemini-key': state.geminiKey || ''
+        },
+        body: JSON.stringify({
+          name: state.profile.name,
+          target: state.target,
+          streak: streak,
+          goal: state.blueprint.goalKey,
+          isGlp: state.blueprint.isGlp,
+          daysUnderTarget: daysUnderTarget,
+          history: history,
+          geminiKey: state.geminiKey
+        })
+      });
+
+      if (res.ok) {
+        const nudgeData = await res.json();
+        state.latestNudge = nudgeData;
+        saveLocalState();
+        renderAiCoachBanner(nudgeData);
+
+        // Async Cloud Sync to Supabase
+        enqueueCloudMutation('ai_nudges', 'INSERT', {
+          id: 'nudge_' + Date.now(),
+          nudge_type: nudgeData.nudgeType || 'coach_nudge',
+          title: nudgeData.title,
+          message: nudgeData.message,
+          suggested_foods: nudgeData.suggestedFoods || [],
+          action_type: nudgeData.suggestGoalAdjustment ? 'goal_adjustment' : 'none'
+        });
+      }
+    } catch (err) {
+      console.warn('AI coach fetch notice:', err);
+      // Fallback local render if fetch failed
+      if (daysUnderTarget >= 3) {
+        renderAiCoachBanner({
+          nudgeType: 'deficit_rescue',
+          title: '🎯 Let\'s Reset Your Momentum',
+          message: `You've been slightly below your ${state.target}g target for 3 days. That's completely okay! Rebuilding consistency starts with one easy high-density bridge meal today.`,
+          suggestedFoods: [
+            { name: 'Double Scoop Whey Shake', grams: 45, tag: 'Instant Catch-Up' },
+            { name: 'Grilled Chicken Breast (150g)', grams: 35, tag: 'Clean Lean Meat' },
+            { name: 'Tuna Can in Olive Oil', grams: 30, tag: 'Zero-Prep' }
+          ],
+          suggestGoalAdjustment: true,
+          recommendedNewTarget: Math.round(state.target * 0.85),
+          adjustmentReason: `Consider easing your daily goal to ${Math.round(state.target * 0.85)}g to build a steady winning streak.`
+        });
+      }
+    }
+  }
+
+  function renderAiCoachBanner(nudge) {
+    const banner = document.getElementById('ai-coach-banner');
+    if (!banner || !nudge) return;
+
+    banner.style.display = 'flex';
+
+    let foodChipsHtml = '';
+    if (nudge.suggestedFoods && nudge.suggestedFoods.length > 0) {
+      nudge.suggestedFoods.forEach((food) => {
+        foodChipsHtml += `
+          <button type="button" class="ai-food-chip" data-grams="${food.grams}" data-name="${escapeHtml(food.name)}">
+            <span>+</span>
+            <span>${escapeHtml(food.name)}</span>
+            <span class="chip-grams">+${food.grams}g</span>
+          </button>
+        `;
+      });
+    }
+
+    let adjustGoalHtml = '';
+    if (nudge.suggestGoalAdjustment && nudge.recommendedNewTarget) {
+      adjustGoalHtml = `
+        <div style="display:flex; flex-direction:column; gap:6px; margin-top:2px;">
+          <div style="font-size:0.75rem; color:var(--text-secondary);">${escapeHtml(nudge.adjustmentReason || '')}</div>
+          <button type="button" class="ai-adjust-goal-btn" id="ai-apply-goal-btn" data-target="${nudge.recommendedNewTarget}">
+            🎯 Easing Target to ${nudge.recommendedNewTarget}g / day
+          </button>
+        </div>
+      `;
+    }
+
+    banner.innerHTML = `
+      <div class="ai-coach-top">
+        <div class="ai-badge">🤖 Gemini AI Coach</div>
+        <div class="ai-coach-title">${escapeHtml(nudge.title || 'Personalized Coaching')}</div>
+      </div>
+      <div class="ai-coach-msg">${escapeHtml(nudge.message || '')}</div>
+      ${foodChipsHtml ? `
+        <div>
+          <div style="font-size:0.6875rem; font-weight:700; color:var(--text-muted); margin-bottom:4px; text-transform:uppercase;">1-Tap Suggested Protein Sources:</div>
+          <div class="ai-suggested-foods-row">${foodChipsHtml}</div>
+        </div>
+      ` : ''}
+      ${adjustGoalHtml}
+    `;
+
+    // 1-Tap Food Logging from AI Coach
+    banner.querySelectorAll('.ai-food-chip').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const grams = parseInt(btn.dataset.grams, 10);
+        const name = btn.dataset.name;
+        logProtein(grams, name, activeSelectedMealSlot);
+        showToast(`⚡ AI Suggested: +${grams}g ${name} logged!`, '🤖');
+      });
+    });
+
+    // 1-Tap Target Recalibration
+    const applyGoalBtn = banner.querySelector('#ai-apply-goal-btn');
+    if (applyGoalBtn) {
+      applyGoalBtn.addEventListener('click', () => {
+        const newTarget = parseInt(applyGoalBtn.dataset.target, 10);
+        if (!isNaN(newTarget) && newTarget > 0) {
+          state.target = newTarget;
+          saveLocalState();
+          enqueueCloudMutation('profiles', 'UPSERT', {
+            id: state.profile.userId,
+            target_grams: state.target
+          });
+          playChime('quest');
+          triggerCelebration();
+          showToast(`🎯 Goal adjusted to ${newTarget}g/day! Let's crush it!`, '⭐');
+          updateDashboard();
+          analyzeTrackingAndNudge();
+        }
+      });
+    }
+  }
+
+  // --- 7. AI REFLECTION STUDIO (WEEKLY & MONTHLY REPORTS) ---
+  async function generateAIReflectionReport(period = 'weekly') {
+    const contentEl = document.getElementById('ai-reflection-content');
+    const genBtn = document.getElementById('generate-reflection-btn');
+
+    if (!contentEl) return;
+
+    const numDays = period === 'monthly' ? 30 : 7;
+    const dailyTotals = {};
+    state.logs.forEach((log) => {
+      dailyTotals[log.dateStr] = (dailyTotals[log.dateStr] || 0) + log.grams;
+    });
+
+    const history = [];
+    let sumProtein = 0;
+    let hitDays = 0;
+
+    for (let i = numDays - 1; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dayNum = String(d.getDate()).padStart(2, '0');
+      const dateStr = `${y}-${m}-${dayNum}`;
+      const grams = dailyTotals[dateStr] || 0;
+      sumProtein += grams;
+      if (grams >= state.target) hitDays++;
+      history.push({ date: dateStr, grams });
+    }
+
+    const avgProtein = Math.round(sumProtein / numDays);
+    const hitRate = Math.round((hitDays / numDays) * 100);
+    const streak = calculateStreak();
+
+    if (genBtn) {
+      genBtn.disabled = true;
+      genBtn.textContent = '✨ Generating AI Analysis...';
+    }
+
+    contentEl.innerHTML = `
+      <div style="text-align:center; padding:20px; color:var(--text-secondary); font-size:0.8125rem;">
+        <span class="sync-dot syncing" style="margin-right:6px;"></span>
+        Analyzing ${numDays} days of intake, habits, and nitrogen balance with Gemini AI...
+      </div>
+    `;
+
+    try {
+      const res = await fetch('/api/ai/report', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-gemini-key': state.geminiKey || ''
+        },
+        body: JSON.stringify({
+          period: period,
+          name: state.profile.name,
+          target: state.target,
+          streak: streak,
+          goal: state.blueprint.goalKey,
+          isGlp: state.blueprint.isGlp,
+          avgProtein: avgProtein,
+          hitRate: hitRate,
+          history: history,
+          geminiKey: state.geminiKey
+        })
+      });
+
+      let report = null;
+      if (res.ok) {
+        report = await res.json();
+      }
+
+      if (!report) {
+        report = {
+          periodType: period,
+          grade: hitRate >= 80 ? 'A+' : (hitRate >= 65 ? 'A' : 'B'),
+          aiSummary: `Over the past ${numDays} days, you maintained a daily average of ${avgProtein}g protein with a ${hitRate}% consistency rate. Your muscle protein synthesis and recovery habits show solid foundation.`,
+          keyWins: [
+            `Logged an average of ${avgProtein}g against your ${state.target}g goal.`,
+            `Hit target on ${hitDays} out of ${numDays} days.`,
+            `Maintained an active streak of ${streak} days.`
+          ],
+          focusAreas: [
+            `Front-load 25g+ protein with breakfast to avoid evening catch-up pressure.`,
+            `Use high-density protein shakes on busy training days.`
+          ],
+          recommendedGoalAdjustment: `Keep your current target at ${state.target}g/day.`
+        };
+      }
+
+      report.avgDailyProtein = avgProtein;
+      report.goalHitRate = hitRate;
+      report.streakAchieved = streak;
+      report.startDate = history[0].date;
+      report.endDate = history[history.length - 1].date;
+
+      state.aiReports[period] = report;
+      saveLocalState();
+      renderReflectionReport(report);
+      playChime('victory');
+      triggerCelebration();
+      showToast(`📊 ${period === 'monthly' ? 'Monthly' : 'Weekly'} AI Reflection generated!`, '✨');
+
+      // Async Cloud Sync to Supabase
+      enqueueCloudMutation('ai_reports', 'UPSERT', {
+        id: `report_${period}_${Date.now()}`,
+        period_type: period,
+        start_date: report.startDate,
+        end_date: report.endDate,
+        avg_daily_protein: avgProtein,
+        goal_hit_rate: hitRate,
+        streak_achieved: streak,
+        ai_summary: report.aiSummary,
+        key_wins: report.keyWins,
+        focus_areas: report.focusAreas,
+        recommended_goal_adjustment: report.recommendedGoalAdjustment
+      });
+
+    } catch (e) {
+      console.warn('AI Report generation notice:', e);
+    } finally {
+      if (genBtn) {
+        genBtn.disabled = false;
+        genBtn.textContent = '✨ Generate AI Report';
+      }
+    }
+  }
+
+  function renderReflectionReport(report) {
+    const contentEl = document.getElementById('ai-reflection-content');
+    if (!contentEl || !report) return;
+
+    let keyWinsHtml = '';
+    if (report.keyWins) {
+      report.keyWins.forEach((win) => {
+        keyWinsHtml += `<div class="key-win-item"><span>🏆</span><span>${escapeHtml(win)}</span></div>`;
+      });
+    }
+
+    let focusAreasHtml = '';
+    if (report.focusAreas) {
+      report.focusAreas.forEach((area) => {
+        focusAreasHtml += `<div class="focus-area-item"><span>🎯</span><span>${escapeHtml(area)}</span></div>`;
+      });
+    }
+
+    contentEl.innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+        <div>
+          <div style="font-size:0.875rem; font-weight:800; color:var(--text-primary);">
+            ${report.periodType === 'monthly' ? '30-Day Monthly Reflection' : '7-Day Weekly Reflection'}
+          </div>
+          <div style="font-size:0.6875rem; color:var(--text-muted);">${report.startDate || ''} to ${report.endDate || ''}</div>
+        </div>
+        <div class="reflection-grade-badge">${escapeHtml(report.grade || 'A')}</div>
+      </div>
+
+      <div class="reflection-metrics-grid">
+        <div class="reflection-metric-box">
+          <div class="metric-val">${report.avgDailyProtein || 0}g</div>
+          <div class="metric-lbl">Daily Average</div>
+        </div>
+        <div class="reflection-metric-box">
+          <div class="metric-val">${report.goalHitRate || 0}%</div>
+          <div class="metric-lbl">Goal Hit Rate</div>
+        </div>
+        <div class="reflection-metric-box">
+          <div class="metric-val">${report.streakAchieved || 0}d</div>
+          <div class="metric-lbl">Peak Streak</div>
+        </div>
+      </div>
+
+      <div class="reflection-narrative-box">
+        ${escapeHtml(report.aiSummary || '')}
+      </div>
+
+      <div>
+        <div class="reflection-section-title">Key Wins & Milestones</div>
+        <div class="key-wins-list">${keyWinsHtml}</div>
+      </div>
+
+      <div>
+        <div class="reflection-section-title">Next Period Action Plan</div>
+        <div class="focus-areas-list">${focusAreasHtml}</div>
+      </div>
+
+      ${report.recommendedGoalAdjustment ? `
+        <div style="background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.3); border-radius:var(--radius-sm); padding:10px 12px; font-size:0.75rem; color:var(--amber-400);">
+          💡 <strong>Goal Recommendation:</strong> ${escapeHtml(report.recommendedGoalAdjustment)}
+        </div>
+      ` : ''}
+    `;
+  }
+
+  function initReflectionStudio() {
+    const weeklyTab = document.getElementById('tab-reflection-weekly');
+    const monthlyTab = document.getElementById('tab-reflection-monthly');
+    const genBtn = document.getElementById('generate-reflection-btn');
+
+    if (weeklyTab && monthlyTab) {
+      weeklyTab.addEventListener('click', () => {
+        activeReflectionPeriod = 'weekly';
+        weeklyTab.classList.add('active');
+        monthlyTab.classList.remove('active');
+        if (state.aiReports['weekly']) {
+          renderReflectionReport(state.aiReports['weekly']);
+        } else {
+          generateAIReflectionReport('weekly');
+        }
+      });
+
+      monthlyTab.addEventListener('click', () => {
+        activeReflectionPeriod = 'monthly';
+        monthlyTab.classList.add('active');
+        weeklyTab.classList.remove('active');
+        if (state.aiReports['monthly']) {
+          renderReflectionReport(state.aiReports['monthly']);
+        } else {
+          generateAIReflectionReport('monthly');
+        }
+      });
+    }
+
+    if (genBtn) {
+      genBtn.addEventListener('click', () => {
+        generateAIReflectionReport(activeReflectionPeriod);
+      });
+    }
+
+    // Render cached report if exists
+    if (state.aiReports[activeReflectionPeriod]) {
+      renderReflectionReport(state.aiReports[activeReflectionPeriod]);
+    } else {
+      const contentEl = document.getElementById('ai-reflection-content');
+      if (contentEl) {
+        contentEl.innerHTML = `
+          <div style="text-align:center; padding:18px; color:var(--text-muted); font-size:0.8125rem;">
+            Click <strong>"✨ Generate AI Report"</strong> to generate your ${activeReflectionPeriod === 'monthly' ? 'monthly' : 'weekly'} reflection.
+          </div>
+        `;
+      }
+    }
+  }
+
+  // --- 8. MEAL NAMES HELPER ---
   function getMealSlotNames(numMeals) {
     if (numMeals === 2) return ['Lunch (Meal 1)', 'Dinner (Meal 2)'];
     if (numMeals === 4) return ['Breakfast (Meal 1)', 'Lunch (Meal 2)', 'Snack (Meal 3)', 'Dinner (Meal 4)'];
@@ -635,7 +1074,7 @@
     return ['Breakfast (Meal 1)', 'Lunch (Meal 2)', 'Dinner (Meal 3)'];
   }
 
-  // --- 10. DYNAMIC MEAL BREAKOUT ALLOCATION ENGINE ---
+  // --- 9. DYNAMIC MEAL BREAKOUT ALLOCATION ENGINE ---
   function computeMealBreakout() {
     const numMeals = Math.min(6, Math.max(2, state.blueprint.meals || 3));
     const slotNames = getMealSlotNames(numMeals);
@@ -670,7 +1109,6 @@
 
     const totalLoggedToday = slotLogsGrams.reduce((a, b) => a + b, 0);
     const totalRemaining = Math.max(0, totalDailyTarget - totalLoggedToday);
-
     const standardPerMeal = Math.round(totalDailyTarget / numMeals);
     const slots = [];
 
@@ -721,13 +1159,7 @@
       activeSelectedMealSlot = firstActiveIndex;
     }
 
-    return {
-      slots,
-      totalDailyTarget,
-      totalLoggedToday,
-      totalRemaining,
-      numMeals
-    };
+    return { slots, totalDailyTarget, totalLoggedToday, totalRemaining, numMeals };
   }
 
   function renderMealBreakoutCard() {
@@ -791,13 +1223,13 @@
     }
   }
 
-  // --- 11. GOAL-SPECIFIC RESCUE COACH & SMART BRIDGES ---
+  // --- 10. GOAL-SPECIFIC RESCUE COACH & SMART BRIDGES ---
   const RESCUE_CONFIGS = {
     'glp': {
       themeClass: 'glp-theme',
       badge: '💉 GLP-1 Low Appetite Rescue',
       title: 'Appetite Suppressed? Use Liquid Density',
-      getAdvice: (rem) => `On GLP-1 injections, solid meals feel heavy. Don't force large plates — reach your remaining <strong>${rem}g</strong> using clear whey or concentrated liquid shakes to protect muscle with zero nausea.`,
+      getAdvice: (rem) => `On GLP-1 injections, solid meals feel heavy. Reach your remaining <strong>${rem}g</strong> using clear whey or concentrated liquid shakes to protect muscle with zero nausea.`,
       bridges: [
         { name: 'Clear Whey Isolate', grams: 25, icon: '🥤' },
         { name: 'Concentrated Whey Shake', grams: 30, icon: '🥛' },
@@ -904,7 +1336,7 @@
     });
   }
 
-  // --- 12. ACTIVE CHALLENGE WIDGET ON DASHBOARD ---
+  // --- 11. ACTIVE CHALLENGE WIDGET ON DASHBOARD ---
   function renderActiveChallengeWidget() {
     const widget = document.getElementById('active-challenge-widget');
     if (!widget) return;
@@ -952,7 +1384,7 @@
     };
   }
 
-  // --- 13. PROTEIN RANKS & XP ENGINE ---
+  // --- 12. PROTEIN RANKS & XP ENGINE ---
   function computeTotalLifetimeXP() {
     const totalGramsLogged = state.logs.reduce((sum, l) => sum + l.grams, 0);
     return totalGramsLogged + state.bonusXp;
@@ -972,7 +1404,7 @@
     }
   }
 
-  // --- 14. HABIT CHALLENGES ENGINE ---
+  // --- 13. HABIT CHALLENGES ENGINE ---
   function evaluateChallengesOnLog(newLog) {
     const today = getTodayDateStr();
     const todayTotal = getTodayTotal();
@@ -1074,7 +1506,7 @@
     }
   }
 
-  // --- 15. DOM RENDERING ---
+  // --- 14. DOM RENDERING ---
   const ringProgress = document.getElementById('ring-progress');
   const currentGramsVal = document.getElementById('current-grams-val');
   const targetGramsVal = document.getElementById('target-grams-val');
@@ -1230,7 +1662,7 @@
     });
   }
 
-  // --- 16. CORE ACTION HANDLERS (OPTIMISTIC & SNAPPY) ---
+  // --- 15. CORE ACTION HANDLERS (OPTIMISTIC & SNAPPY) ---
   function logProtein(grams, name = '', mealSlot = null) {
     const g = parseInt(grams, 10);
     if (isNaN(g) || g <= 0) return;
@@ -1246,14 +1678,12 @@
       mealSlot: chosenSlot
     };
 
-    // 1. Immediate Local State Write (<1ms Snappiness)
     state.logs.push(newLog);
     saveLocalState();
     playHaptic();
     playChime('pop');
     showToast(`+${g}g ${newLog.name} logged!`);
     
-    // 2. Background Cloud Sync (Zero lag)
     enqueueCloudMutation('protein_logs', 'INSERT', {
       id: newLog.id,
       grams: newLog.grams,
@@ -1265,6 +1695,7 @@
 
     evaluateChallengesOnLog(newLog);
     updateDashboard();
+    analyzeTrackingAndNudge();
   }
 
   function deleteLog(id) {
@@ -1274,13 +1705,13 @@
       saveLocalState();
       showToast(`Removed ${removed.grams}g entry`, '🗑️');
 
-      // Async Cloud Delete
       enqueueCloudMutation('protein_logs', 'DELETE', { id: removed.id });
       updateDashboard();
+      analyzeTrackingAndNudge();
     }
   }
 
-  // --- 17. CHALLENGES & COMMITMENT RENDERING ---
+  // --- 16. CHALLENGES & COMMITMENT RENDERING ---
   function renderChallenges() {
     const list = document.getElementById('challenges-list');
     if (!list) return;
@@ -1414,7 +1845,7 @@
     });
   }
 
-  // --- 18. INSIGHTS & RANKS RENDERING ---
+  // --- 17. INSIGHTS & RANKS RENDERING ---
   function renderInsights() {
     const xp = computeTotalLifetimeXP();
     const rank = getRankDetails(xp);
@@ -1510,7 +1941,7 @@
     });
   }
 
-  // --- 19. INTERACTIVE SCIENTIFIC ONBOARDING & SETUP ENGINE ---
+  // --- 18. INTERACTIVE SCIENTIFIC ONBOARDING & SETUP ENGINE ---
   let wizardData = {
     step: 0,
     goal: state.blueprint.goalKey || 'muscle',
@@ -1576,13 +2007,7 @@
     const dailyTarget = Math.round(weightInKg * finalRatio);
     const perMeal = Math.round(dailyTarget / wizardData.meals);
 
-    return {
-      dailyTarget,
-      perMeal,
-      finalRatio,
-      goalCfg,
-      weightInKg
-    };
+    return { dailyTarget, perMeal, finalRatio, goalCfg, weightInKg };
   }
 
   function renderWizardStep() {
@@ -1827,7 +2252,6 @@
         closeModal(document.getElementById('wizard-modal'));
         showToast(`⚡ Scientific Blueprint Active: ${calc.dailyTarget}g Target!`, '🚀');
 
-        // Async Cloud Sync
         enqueueCloudMutation('blueprints', 'UPSERT', {
           weight: state.blueprint.weight,
           unit: state.blueprint.unit,
@@ -1845,6 +2269,7 @@
         });
 
         updateDashboard();
+        analyzeTrackingAndNudge();
       });
     }
   }
@@ -1861,7 +2286,7 @@
     }
   }
 
-  // --- 20. PRESETS & FOOD CATALOG MANAGER ---
+  // --- 19. PRESETS & FOOD CATALOG MANAGER ---
   function renderPresetsEditor() {
     const list = document.getElementById('presets-edit-list');
     const catalogContainer = document.getElementById('catalog-chips-container');
@@ -1935,7 +2360,6 @@
           closeModal(document.getElementById('presets-modal'));
           showToast('Custom Presets saved successfully!');
 
-          // Sync presets to cloud
           newPresets.forEach((p) => {
             enqueueCloudMutation('custom_presets', 'UPSERT', {
               id: p.id,
@@ -1951,7 +2375,7 @@
     }
   }
 
-  // --- 21. SUPABASE AUTH & CLOUD PROFILE MANAGER ---
+  // --- 20. SUPABASE AUTH & CLOUD PROFILE MANAGER ---
   function renderAuthViews(activeTab = 'profile') {
     const tabs = {
       profile: document.getElementById('tab-auth-profile'),
@@ -1980,7 +2404,6 @@
     const errorMsg = document.getElementById('auth-error-msg');
     if (errorMsg) errorMsg.style.display = 'none';
 
-    // Populate user profile info
     const nameInput = document.getElementById('auth-name-input');
     const avatarDisplay = document.getElementById('profile-avatar-display');
     const userEmailLabel = document.getElementById('auth-logged-user-email');
@@ -2001,11 +2424,13 @@
       signOutBtn.style.display = state.profile.isLoggedIn ? 'block' : 'none';
     }
 
-    // Populate Supabase config inputs
     const urlInput = document.getElementById('supabase-url-input');
     const anonInput = document.getElementById('supabase-anon-input');
+    const geminiKeyInput = document.getElementById('gemini-key-input');
+
     if (urlInput) urlInput.value = state.supabaseConfig.url || '';
     if (anonInput) anonInput.value = state.supabaseConfig.anonKey || '';
+    if (geminiKeyInput) geminiKeyInput.value = state.geminiKey || '';
   }
 
   function showAuthError(msg) {
@@ -2020,7 +2445,6 @@
     const profileBtn = document.getElementById('user-avatar-btn');
     const profileModal = document.getElementById('profile-modal');
 
-    // Tab buttons
     ['profile', 'signin', 'signup', 'config'].forEach((tabKey) => {
       const btn = document.getElementById(`tab-auth-${tabKey}`);
       if (btn) {
@@ -2035,7 +2459,6 @@
       });
     }
 
-    // Avatar selector buttons
     document.querySelectorAll('.avatar-option-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         state.profile.avatar = btn.dataset.avatar;
@@ -2043,7 +2466,6 @@
       });
     });
 
-    // Save Profile button
     const saveProfileBtn = document.getElementById('save-profile-btn');
     if (saveProfileBtn) {
       saveProfileBtn.addEventListener('click', () => {
@@ -2062,7 +2484,6 @@
       });
     }
 
-    // Force Sync button
     const forceSyncBtn = document.getElementById('force-cloud-sync-btn');
     if (forceSyncBtn) {
       forceSyncBtn.addEventListener('click', async () => {
@@ -2081,7 +2502,6 @@
       });
     }
 
-    // Sign In Action
     const submitSignInBtn = document.getElementById('submit-signin-btn');
     if (submitSignInBtn) {
       submitSignInBtn.addEventListener('click', async () => {
@@ -2103,13 +2523,8 @@
         submitSignInBtn.textContent = 'Signing in...';
 
         try {
-          const { data, error } = await supabaseClient.auth.signInWithPassword({
-            email,
-            password
-          });
-
+          const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
           if (error) throw error;
-
           showToast(`Welcome back, ${data.user.email}!`, '👋');
           closeModal(profileModal);
         } catch (err) {
@@ -2121,7 +2536,6 @@
       });
     }
 
-    // Sign Up Action
     const submitSignUpBtn = document.getElementById('submit-signup-btn');
     if (submitSignUpBtn) {
       submitSignUpBtn.addEventListener('click', async () => {
@@ -2184,7 +2598,6 @@
       });
     }
 
-    // Sign Out Action
     const signOutBtn = document.getElementById('sign-out-btn');
     if (signOutBtn) {
       signOutBtn.addEventListener('click', async () => {
@@ -2200,12 +2613,12 @@
       });
     }
 
-    // Save Supabase Configuration Action
     const saveConfigBtn = document.getElementById('save-supabase-config-btn');
     if (saveConfigBtn) {
       saveConfigBtn.addEventListener('click', () => {
         const url = document.getElementById('supabase-url-input').value.trim();
         const anonKey = document.getElementById('supabase-anon-input').value.trim();
+        const geminiKey = document.getElementById('gemini-key-input').value.trim();
 
         if (!url || !anonKey) {
           showAuthError('Please provide both Supabase URL and Anon Key.');
@@ -2213,14 +2626,14 @@
         }
 
         state.supabaseConfig = { url, anonKey };
-        localStorage.setItem(STORAGE_KEYS.SUPABASE_CONFIG, JSON.stringify(state.supabaseConfig));
+        state.geminiKey = geminiKey;
+        saveLocalState();
         initSupabase();
-        showToast('Supabase connection settings saved!', '✓');
+        showToast('Configuration settings saved!', '✓');
         renderAuthViews('signin');
       });
     }
 
-    // Test Supabase Connection Action
     const testConnBtn = document.getElementById('test-supabase-conn-btn');
     if (testConnBtn) {
       testConnBtn.addEventListener('click', async () => {
@@ -2244,7 +2657,7 @@
           } else {
             showToast('✅ Supabase project connected successfully!', '⚡');
             state.supabaseConfig = { url, anonKey };
-            localStorage.setItem(STORAGE_KEYS.SUPABASE_CONFIG, JSON.stringify(state.supabaseConfig));
+            saveLocalState();
             initSupabase();
           }
         } catch (err) {
@@ -2257,7 +2670,7 @@
     }
   }
 
-  // --- 22. NAVIGATION & TAB SWITCHING ---
+  // --- 21. NAVIGATION & TAB SWITCHING ---
   function initNavigation() {
     const tabs = document.querySelectorAll('.nav-tab');
     const views = {
@@ -2289,7 +2702,7 @@
     });
   }
 
-  // --- 23. MODALS ENGINE ---
+  // --- 22. MODALS ENGINE ---
   function openModal(modalEl) {
     if (modalEl) modalEl.classList.add('active');
   }
@@ -2353,14 +2766,14 @@
     }
   }
 
-  // --- 24. UTILS ---
+  // --- 23. UTILS ---
   function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
   }
 
-  // --- 25. INITIALIZATION ---
+  // --- 24. INITIALIZATION ---
   function init() {
     const customForm = document.getElementById('quick-add-form');
     const proteinInput = document.getElementById('protein-amount-input');
@@ -2394,7 +2807,6 @@
       });
     });
 
-    // Handle online / reconnect auto-sync
     window.addEventListener('online', () => {
       showToast('🟢 Back online! Syncing data...', '☁️');
       flushSyncQueue();
@@ -2408,6 +2820,8 @@
     initProfileAndAuth();
     initSupabase();
     renderChallenges();
+    initReflectionStudio();
+    analyzeTrackingAndNudge();
     checkFirstTimeOnboarding();
   }
 
