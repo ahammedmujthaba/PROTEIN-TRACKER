@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#080c14">
+  <meta name="description" content="Scientific protein tracker with guided onboarding quiz, GLP-1 muscle shield protocol, goal-specific deficit rescue, and 1-tap logging.">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Protein Tracker - Scientific Macro & Habit Engine</title>
+  
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Confetti Celebration Canvas -->
+  <canvas id="confetti-canvas"></canvas>
+
+  <div class="app-container">
+    
+    <!-- Sticky App Header -->
+    <header class="app-header">
+      <div class="brand-group">
+        <!-- Dumbbell / Protein Vector Icon -->
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 7v10M9 4v16M15 4v16M18 7v10"/>
+            <rect x="9" y="10.5" width="6" height="3" rx="1.5" fill="currentColor"/>
+          </svg>
+        </div>
+        <div class="brand-titles">
+          <h1 class="app-title">Protein Tracker</h1>
+          <span class="current-date-label" id="current-date">Today</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <!-- Flame Streak Pill -->
+        <button class="streak-pill" id="streak-pill" title="View consistency & streak" aria-label="Streak Counter">
+          <svg class="flame-icon" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 23c-4.97 0-9-4.03-9-9 0-3.66 2.37-6.84 5.76-8.21.36-.15.77.08.83.47.16 1.09.84 2.19 1.87 2.74.34.18.75-.02.85-.39.54-1.99 1.94-3.56 3.8-4.32.37-.15.79.09.84.48.16 1.1.86 2.2 1.89 2.74.34.18.74-.03.85-.4 1.15-4.04 4.54-6.3 4.54-6.3-.01.44-.04.88-.1 1.32C23.01 7.21 21 12.33 21 14c0 4.97-4.03 9-9 9z"/>
+          </svg>
+          <span id="streak-count">0</span>d Streak
+        </button>
+
+        <!-- Blueprint Calculator / Quiz Quick Trigger -->
+        <button class="icon-btn" id="open-blueprint-btn" title="Onboarding Tour & Scientific Setup" aria-label="Protein Blueprint Quiz">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+          </svg>
+        </button>
+
+        <!-- Mobile Phone QR Connect Button -->
+        <button class="header-mobile-qr-btn" id="open-mobile-qr-btn" title="Open on Phone (QR Code & Expo)">
+          📱 Phone QR
+        </button>
+
+        <!-- User Profile / Auth Button -->
+        <button class="user-avatar-btn" id="user-avatar-btn" title="User Profile & Cloud Sync" aria-label="User Profile">
+          ⚡
+        </button>
+      </div>
+    </header>
+
+    <!-- App Tabs Navigation -->
+    <nav class="app-nav" aria-label="Main Navigation">
+      <button class="nav-tab active" id="track-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        Track
+      </button>
+
+      <button class="nav-tab" id="challenges-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6M18 9h1.5a2.5 2.5 0 0 0 0-5H18M4 22h16M10 14.66V17c0 .55-.45 1-1 1H7v2h10v-2h-2c-.55 0-1-.45-1-1v-2.34c3.08-.63 5.43-3.23 5.86-6.42.08-.6-.39-1.24-1-1.24H5.14c-.61 0-1.08.64-1 1.24.43 3.19 2.78 5.79 5.86 6.42z"/>
+        </svg>
+        Quests & Challenges
+        <span class="tab-badge">4</span>
+      </button>
+
+      <button class="nav-tab" id="insights-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="20" x2="18" y2="10"/>
+          <line x1="12" y1="20" x2="12" y2="4"/>
+          <line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+        Ranks
+      </button>
+    </nav>
+
+    <!-- VIEW 1: TRACK (Core Fast Loop) -->
+    <main class="view-container active-view" id="track-view">
+      
+      <!-- HERO: Dynamic SVG Ring -->
+      <section class="hero-card" aria-label="Daily Progress Ring">
+        <div class="ring-wrapper">
+          <svg class="progress-ring" viewBox="0 0 220 220" width="220" height="220">
+            <circle class="ring-bg" cx="110" cy="110" r="90" fill="none" />
+            <circle id="ring-progress" class="ring-progress" cx="110" cy="110" r="90" fill="none" />
+          </svg>
+
+          <div class="ring-center-content">
+            <div class="current-grams-val">
+              <span id="current-grams-val">0</span><span class="grams-unit">g</span>
+            </div>
+            <div class="target-badge">of <span id="target-grams-val">150</span>g target</div>
+            <div class="pct-badge" id="pct-badge">0%</div>
+          </div>
+        </div>
+
+        <!-- Status & Retention Banner -->
+        <div class="status-banner">
+          <div class="status-left">
+            <div class="status-icon" id="status-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </div>
+            <div class="status-text-block">
+              <div class="status-headline" id="status-headline">150g remaining today</div>
+              <div class="status-sub" id="status-sub">Tap a preset or quick-log your meal</div>
+            </div>
+          </div>
+          <button class="blueprint-trigger-btn" id="blueprint-trigger-btn" title="Onboarding Tour & Target Setup">
+            ⚡ Onboarding Setup
+          </button>
+        </div>
+      </section>
+
+      <!-- ACTIVE CHALLENGE COMMITMENT WIDGET -->
+      <section class="active-challenge-widget" id="active-challenge-widget" style="display: none; cursor: pointer;" aria-label="Active Challenge">
+        <!-- Rendered dynamically by app.js -->
+      </section>
+
+      <!-- GOAL-SPECIFIC PROTEIN RESCUE COACH & SMART BRIDGES -->
+      <section class="rescue-coach-card" id="rescue-coach-card" style="display: none;" aria-label="Protein Rescue Coach">
+        <!-- Rendered dynamically by app.js -->
+      </section>
+
+      <!-- DYNAMIC MEAL BREAKOUT SECTION (Triggered by Blueprint) -->
+      <section class="meal-breakout-card" id="meal-breakout-section" style="display: none;" aria-label="Dynamic Meal Breakout">
+        <div class="meal-breakout-header">
+          <div class="meal-breakout-title-group">
+            <h2 class="meal-breakout-title">🍽️ Dynamic Meal Breakout</h2>
+            <span class="meal-breakout-badge" id="meal-breakout-badge">Auto-Adjusts</span>
+          </div>
+          <button class="section-action-btn" id="edit-blueprint-from-card" title="Edit Blueprint">Edit Quiz / Meals</button>
+        </div>
+        <div class="meal-slots-grid" id="meal-slots-grid">
+          <!-- Populated by app.js -->
+        </div>
+      </section>
+
+      <!-- SECTION 2: 1-Tap Quick Presets -->
+      <section class="section-block" aria-label="1-Tap Quick Presets">
+        <div class="section-header">
+          <h2 class="section-title">1-Tap Quick Presets</h2>
+          <button class="section-action-btn" id="open-presets-btn" title="Customize Quick Presets">+ Customize / Food Catalog</button>
+        </div>
+        <div class="presets-grid" id="presets-grid">
+          <!-- Populated by app.js -->
+        </div>
+      </section>
+
+      <!-- SECTION 3: Custom Quick Logger -->
+      <section class="quick-input-card" aria-label="Custom Quick Log">
+        <div class="section-header" style="padding:0;">
+          <h2 class="section-title">Quick Log Protein</h2>
+        </div>
+
+        <form id="quick-add-form" onsubmit="return false;">
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            
+            <!-- Dynamic Meal Slot Chips -->
+            <div class="meal-tag-selector" id="meal-tag-selector" style="display: none;">
+              <!-- Rendered by app.js -->
+            </div>
+
+            <div class="input-row">
+              <div class="input-wrapper">
+                <input 
+                  type="number" 
+                  id="protein-amount-input" 
+                  class="protein-input" 
+                  placeholder="0" 
+                  min="1" 
+                  max="500" 
+                  inputmode="numeric"
+                  required
+                  aria-label="Protein amount in grams"
+                />
+                <span class="input-unit-tag">g</span>
+              </div>
+              <button type="submit" class="log-submit-btn" id="log-submit-btn" aria-label="Log Protein">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+                Log
+              </button>
+            </div>
+
+            <!-- Optional meal label -->
+            <input 
+              type="text" 
+              id="protein-name-input" 
+              class="name-input" 
+              placeholder="Optional note (e.g. Steak, Shake, Eggs)" 
+              aria-label="Meal note"
+            />
+          </div>
+        </form>
+
+        <!-- Quick Stepper Chips -->
+        <div class="quick-stepper-row">
+          <button type="button" class="stepper-btn" data-add="5">+5g</button>
+          <button type="button" class="stepper-btn" data-add="10">+10g</button>
+          <button type="button" class="stepper-btn" data-add="20">+20g</button>
+          <button type="button" class="stepper-btn" data-add="30">+30g</button>
+          <button type="button" class="stepper-btn" data-action="clear" style="color: var(--rose-500);">Clear</button>
+        </div>
+      </section>
+
+      <!-- SECTION 4: Today's Timeline Log Feed -->
+      <section class="logs-card" aria-label="Today's Log Timeline">
+        <div class="section-header" style="padding:0;">
+          <h2 class="section-title">Today's Activity</h2>
+        </div>
+        <div class="logs-list" id="logs-list">
+          <!-- Populated by app.js -->
+        </div>
+      </section>
+
+    </main>
+
+    <!-- VIEW 2: CHALLENGES & HABIT QUESTS -->
+    <section class="view-container" id="challenges-view">
+      <div class="challenges-banner">
+        <div class="challenges-banner-icon">🏆</div>
+        <div class="challenges-banner-text">
+          <h3>Habit Challenges & Commitments</h3>
+          <p>Accept multi-day challenges to commit to your protein discipline, earn XP, and protect lean muscle.</p>
+        </div>
+      </div>
+
+      <div class="challenges-list" id="challenges-list">
+        <!-- Rendered by app.js -->
+      </div>
+    </section>
+
+    <!-- VIEW 3: INSIGHTS & PROTEIN RANKS -->
+    <section class="view-container" id="insights-view">
+      
+      <!-- Protein Tier & Rank Hero -->
+      <div class="rank-hero-card">
+        <div class="rank-top-row">
+          <div class="rank-emblem" id="rank-emblem">⚡</div>
+          <div class="rank-details">
+            <div class="rank-tier-title" id="rank-tier-title">Iron Starter</div>
+            <div class="rank-sub" id="rank-sub">Total Muscle Fuel: 0 XP</div>
+          </div>
+        </div>
+
+        <div class="xp-progress-bar-container">
+          <div class="xp-track">
+            <div class="xp-fill" id="xp-fill" style="width: 0%;"></div>
+          </div>
+          <div class="xp-labels">
+            <span id="xp-current-label">0 XP</span>
+            <span id="xp-next-label">500 XP (Bronze Lifter)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7-Day Consistency Bars -->
+      <div class="logs-card">
+        <div class="section-header" style="padding:0;">
+          <h2 class="section-title">7-Day Consistency Trend</h2>
+        </div>
+        <div class="trend-bars-container" id="trend-bars-container">
+          <!-- Rendered by app.js -->
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px;">
+          <div style="background: var(--bg-surface-raised); padding: 10px; border-radius: var(--radius-sm); text-align: center;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">7-Day Average</div>
+            <div id="weekly-avg-label" style="font-size: 1.125rem; font-weight: 800; font-family: var(--font-mono); color: var(--emerald-400); margin-top: 2px;">-- g</div>
+          </div>
+          <div style="background: var(--bg-surface-raised); padding: 10px; border-radius: var(--radius-sm); text-align: center;">
+            <div style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Goal Hit Rate</div>
+            <div id="goal-hit-rate-label" style="font-size: 1.125rem; font-weight: 800; font-family: var(--font-mono); color: var(--amber-400); margin-top: 2px;">-- %</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Daily Science Nugget -->
+      <div class="science-nugget-card" id="science-nugget-card">
+        <!-- Rendered by app.js -->
+      </div>
+
+    </section>
+
+  </div>
+
+  <!-- MODAL: SCIENTIFIC ONBOARDING TOUR & BLUEPRINT ENGINE -->
+  <div class="modal-overlay" id="wizard-modal" role="dialog" aria-modal="true" aria-labelledby="wizard-modal-title">
+    <div class="modal-window">
+      
+      <!-- Modal Top Bar -->
+      <div class="modal-header">
+        <span class="wizard-step-badge" id="wizard-step-badge">Welcome Onboarding</span>
+        <button class="close-modal-btn" aria-label="Close quiz">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Animated Progress Line -->
+      <div class="wizard-progress-track" id="wizard-progress-track">
+        <div class="wizard-progress-fill" id="wizard-progress-fill" style="width: 10%;"></div>
+      </div>
+
+      <!-- STAGE 0: ONBOARDING WELCOME HERO PAGE -->
+      <div id="wizard-step-0" class="wizard-welcome-card">
+        <div class="welcome-logo-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M6 7v10M9 4v16M15 4v16M18 7v10"/>
+            <rect x="9" y="10.5" width="6" height="3" rx="1.5" fill="currentColor"/>
+          </svg>
+        </div>
+
+        <div>
+          <h2 class="welcome-hero-title">Welcome to Protein Tracker</h2>
+          <p class="welcome-hero-sub">The Scientific Macro, GLP-1 & Habit Consistency Engine built to protect and build lean muscle.</p>
+        </div>
+
+        <div class="welcome-pillars-list">
+          <div class="welcome-pillar-item">
+            <div class="welcome-pillar-icon">🧬</div>
+            <div class="welcome-pillar-text">
+              <h4>1. Scientific Protein Calculation</h4>
+              <p>Personalized to your biological goal (Muscle, Shred, GLP-1 Injections, or Recovery).</p>
+            </div>
+          </div>
+
+          <div class="welcome-pillar-item">
+            <div class="welcome-pillar-icon">🍽️</div>
+            <div class="welcome-pillar-text">
+              <h4>2. Dynamic Meal Breakout</h4>
+              <p>Auto-rebalances your lunch and dinner requirements as you log throughout the day.</p>
+            </div>
+          </div>
+
+          <div class="welcome-pillar-item">
+            <div class="welcome-pillar-icon">🏆</div>
+            <div class="welcome-pillar-text">
+              <h4>3. 3-Day Starter Habit Challenge</h4>
+              <p>Lock in consistency with the 20g Breakfast Quest and earn XP ranks.</p>
+            </div>
+          </div>
+        </div>
+
+        <button type="button" class="welcome-start-btn" id="start-onboarding-quiz-btn">
+          🚀 Begin Scientific Setup (30s)
+        </button>
+      </div>
+
+      <!-- STEP 1: WHY DO YOU NEED PROTEIN? (Goals & Drivers) -->
+      <div id="wizard-step-1" style="display: none; flex-direction: column; gap: 10px;">
+        <div>
+          <h3 class="wizard-step-title" id="wizard-modal-title">Why do you want to optimize your protein?</h3>
+          <p class="wizard-step-desc">Select your primary biological driver so we can apply scientific protein pacing.</p>
+        </div>
+
+        <div class="wizard-options-list" id="wiz-goals-container">
+          <div class="wizard-choice-card wiz-goal-choice glp-special" data-goal="glp" data-glp="true">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">💉</div>
+              <div class="wizard-choice-texts">
+                <h4>GLP-1 Weight Loss / Muscle Shield</h4>
+                <p>Preserve lean muscle mass & metabolism on Ozempic, Wegovy, or Mounjaro.</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+
+          <div class="wizard-choice-card wiz-goal-choice selected" data-goal="muscle" data-glp="false">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">💪</div>
+              <div class="wizard-choice-texts">
+                <h4>Hypertrophy & Muscle Growth</h4>
+                <p>Maximize Muscle Protein Synthesis (MPS) and build lean strength.</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+
+          <div class="wizard-choice-card wiz-goal-choice" data-goal="cut" data-glp="false">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">🔥</div>
+              <div class="wizard-choice-texts">
+                <h4>Fat Loss & Metabolism Boost</h4>
+                <p>Burn fat aggressively while retaining muscle tissue and curbing appetite.</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+
+          <div class="wizard-choice-card wiz-goal-choice" data-goal="athlete" data-glp="false">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">⚡</div>
+              <div class="wizard-choice-texts">
+                <h4>Athletic Recovery & Power</h4>
+                <p>Speed up micro-trauma muscle repair between heavy sports and workouts.</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+
+          <div class="wizard-choice-card wiz-goal-choice" data-goal="health" data-glp="false">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">🌿</div>
+              <div class="wizard-choice-texts">
+                <h4>Daily Tone, Health & Longevity</h4>
+                <p>Sustain daily energy, curb snacking cravings, and support healthy aging.</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 2: ACTIVITY LEVEL -->
+      <div id="wizard-step-2" style="display: none; flex-direction: column; gap: 10px;">
+        <div>
+          <h3 class="wizard-step-title">What is your weekly activity level?</h3>
+          <p class="wizard-step-desc">Physical training increases nitrogen turnover and muscle amino acid demands.</p>
+        </div>
+
+        <div class="wizard-options-list" id="wiz-activity-container">
+          <div class="wizard-choice-card wiz-activity-choice" data-activity="heavy">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">🏋️‍♂️</div>
+              <div class="wizard-choice-texts">
+                <h4>Heavy Resistance Training</h4>
+                <p>4–6 days/week intense lifting or cross-training (+0.2g/kg demand)</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+
+          <div class="wizard-choice-card wiz-activity-choice selected" data-activity="active">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">🏃</div>
+              <div class="wizard-choice-texts">
+                <h4>Active Training / Sports</h4>
+                <p>3–4 days/week workouts, running, or active athletics</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+
+          <div class="wizard-choice-card wiz-activity-choice" data-activity="light">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">🚶</div>
+              <div class="wizard-choice-texts">
+                <h4>Light Exercise / Walking</h4>
+                <p>1–2 days/week light exercise and daily steps</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+
+          <div class="wizard-choice-card wiz-activity-choice" data-activity="sedentary">
+            <div class="wizard-choice-left">
+              <div class="wizard-choice-icon">🛋️</div>
+              <div class="wizard-choice-texts">
+                <h4>Mostly Sedentary</h4>
+                <p>Desk job with minimal physical activity</p>
+              </div>
+            </div>
+            <div class="wizard-check-radio">✓</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 3: BODY WEIGHT -->
+      <div id="wizard-step-3" style="display: none; flex-direction: column; gap: 12px;">
+        <div>
+          <h3 class="wizard-step-title">What is your body weight?</h3>
+          <p class="wizard-step-desc">Protein targets are scientifically scaled to your total body mass.</p>
+        </div>
+
+        <div class="wizard-weight-box">
+          <div class="unit-switch-group">
+            <button type="button" class="unit-btn active" id="wiz-unit-kg">Kilograms (kg)</button>
+            <button type="button" class="unit-btn" id="wiz-unit-lbs">Pounds (lbs)</button>
+          </div>
+
+          <div class="wizard-weight-display" id="wiz-weight-num">75 kg</div>
+
+          <input type="range" class="custom-range" id="wiz-weight-range" min="40" max="160" value="75" />
+
+          <!-- Quick Steppers -->
+          <div style="display: flex; gap: 8px; width: 100%;">
+            <button type="button" class="btn-secondary wiz-stepper-btn" data-delta="-5" style="flex: 1; padding: 6px;">-5</button>
+            <button type="button" class="btn-secondary wiz-stepper-btn" data-delta="-1" style="flex: 1; padding: 6px;">-1</button>
+            <button type="button" class="btn-secondary wiz-stepper-btn" data-delta="1" style="flex: 1; padding: 6px;">+1</button>
+            <button type="button" class="btn-secondary wiz-stepper-btn" data-delta="5" style="flex: 1; padding: 6px;">+5</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 4: MEALS PER DAY -->
+      <div id="wizard-step-4" style="display: none; flex-direction: column; gap: 12px;">
+        <div>
+          <h3 class="wizard-step-title">How many meals or shakes do you eat daily?</h3>
+          <p class="wizard-step-desc">We will balance your target across each meal so you easily reach Leucine thresholds.</p>
+        </div>
+
+        <div class="meals-stepper-pills" style="margin-top: 8px;">
+          <button type="button" class="meal-count-btn wiz-meal-btn" data-meals="2">2 Meals</button>
+          <button type="button" class="meal-count-btn wiz-meal-btn active" data-meals="3">3 Meals</button>
+          <button type="button" class="meal-count-btn wiz-meal-btn" data-meals="4">4 Meals</button>
+          <button type="button" class="meal-count-btn wiz-meal-btn" data-meals="5">5 Meals</button>
+          <button type="button" class="meal-count-btn wiz-meal-btn" data-meals="6">6 Meals</button>
+        </div>
+
+        <div style="background: var(--bg-surface-raised); border-radius: var(--radius-md); padding: 12px; font-size: 0.75rem; color: var(--text-secondary); line-height: 1.4;">
+          💡 <strong>Science Note:</strong> Eating 3–5 protein feedings per day ensures steady Muscle Protein Synthesis without overloading single-meal digestion.
+        </div>
+      </div>
+
+      <!-- STEP 5: GRAND REVEAL SCIENTIFIC BLUEPRINT -->
+      <div id="wizard-step-5" style="display: none; flex-direction: column; gap: 14px;">
+        <div class="blueprint-reveal-card">
+          <span class="quest-tag" id="reveal-goal-badge">💪 Hypertrophy Protocol</span>
+          
+          <div class="reveal-target-stat">
+            <div style="font-size: 0.8125rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">Your Scientific Daily Target</div>
+            <div class="reveal-grams-num" id="reveal-target-grams">150g</div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%;">
+            <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: var(--radius-sm);">
+              <div style="font-size: 0.6875rem; color: var(--text-muted);">Per Meal Base</div>
+              <div style="font-size: 1.125rem; font-weight: 800; font-family: var(--font-mono); color: var(--emerald-400);" id="reveal-per-meal-num">50g</div>
+            </div>
+            <div style="background: rgba(0,0,0,0.3); padding: 10px; border-radius: var(--radius-sm);">
+              <div style="font-size: 0.6875rem; color: var(--text-muted);">Starter Quest</div>
+              <div style="font-size: 0.875rem; font-weight: 800; color: var(--amber-400);">3-Day Challenge</div>
+            </div>
+          </div>
+
+          <div class="reveal-science-badge">
+            <strong style="color: var(--text-primary);">🧬 Scientific Recommendation:</strong>
+            <p id="reveal-science-text" style="margin-top: 4px;"></p>
+          </div>
+
+          <button class="wizard-activate-btn" id="wizard-activate-btn">
+            🚀 Activate My Scientific Blueprint & Start
+          </button>
+        </div>
+      </div>
+
+      <!-- Modal Bottom Navigation -->
+      <div class="wizard-footer-nav" id="wizard-footer-nav" style="display: none;">
+        <button type="button" class="btn-secondary" id="wizard-prev-btn">← Back</button>
+        <button type="button" class="btn-primary" id="wizard-next-btn">Next Step →</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- MODAL 2: CUSTOMIZE PRESETS & FOOD CATALOG -->
+  <div class="modal-overlay" id="presets-modal" role="dialog" aria-modal="true" aria-labelledby="presets-modal-title">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h2 class="modal-title" id="presets-modal-title">Customize 1-Tap Presets</h2>
+        <button class="close-modal-btn" aria-label="Close modal">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <div>
+        <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px;">1-TAP FOOD CATALOG (Click to add)</div>
+        <div class="catalog-chips-container" id="catalog-chips-container">
+          <!-- Populated by app.js -->
+        </div>
+      </div>
+
+      <div style="border-top: 1px solid var(--border-subtle); padding-top: 10px;">
+        <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 6px;">ACTIVE PRESET BUTTONS</div>
+        <div id="presets-edit-list" style="display: flex; flex-direction: column; gap: 8px; max-height: 220px; overflow-y: auto;">
+          <!-- Populated by app.js -->
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 8px; margin-top: 4px;">
+        <button class="btn-secondary" id="add-preset-row-btn" style="flex: 1;">+ Add Custom Item</button>
+        <button class="btn-primary" id="save-presets-btn" style="flex: 1;">Save Presets</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL 3: USER PROFILE & CLOUD ACCOUNT -->
+  <div class="modal-overlay" id="profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-modal-title">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h2 class="modal-title" id="profile-modal-title">Athlete Profile & Cloud Sync</h2>
+        <button class="close-modal-btn" aria-label="Close modal">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="profile-avatar-row">
+        <div class="profile-avatar-display" id="profile-avatar-display">⚡</div>
+        <div>
+          <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px;">Choose Avatar</div>
+          <div style="display: flex; gap: 6px;">
+            <button type="button" class="btn-secondary avatar-option-btn" data-avatar="⚡" style="padding: 4px 8px;">⚡</button>
+            <button type="button" class="btn-secondary avatar-option-btn" data-avatar="🦁" style="padding: 4px 8px;">🦁</button>
+            <button type="button" class="btn-secondary avatar-option-btn" data-avatar="🦍" style="padding: 4px 8px;">🦍</button>
+            <button type="button" class="btn-secondary avatar-option-btn" data-avatar="🔥" style="padding: 4px 8px;">🔥</button>
+            <button type="button" class="btn-secondary avatar-option-btn" data-avatar="🏆" style="padding: 4px 8px;">🏆</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="auth-form">
+        <div class="auth-input-group">
+          <label class="auth-label" for="auth-name-input">Athlete Name</label>
+          <input type="text" id="auth-name-input" class="auth-input" placeholder="e.g. Alex" value="Athlete" />
+        </div>
+
+        <div class="auth-input-group">
+          <label class="auth-label" for="auth-email-input">Account Email</label>
+          <input type="email" id="auth-email-input" class="auth-input" placeholder="you@example.com" value="athlete@protein.local" />
+        </div>
+      </div>
+
+      <div class="cloud-sync-pill">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+        </svg>
+        <span>Cloud Sync Active • All logs backed up</span>
+      </div>
+
+      <button class="btn-primary" id="save-profile-btn" style="width: 100%;">Save & Sync Account</button>
+    </div>
+  </div>
+
+  <!-- MODAL 4: PHONE CONNECT & QR CODE -->
+  <div class="modal-overlay" id="mobile-qr-modal" role="dialog" aria-modal="true" aria-labelledby="mobile-qr-modal-title">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h2 class="modal-title" id="mobile-qr-modal-title">📱 Open on Your Phone</h2>
+        <button class="close-modal-btn" aria-label="Close modal">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="mobile-qr-modal-body">
+        <div class="qr-code-wrapper">
+          <img 
+            id="expo-qr-img"
+            class="qr-code-img" 
+            src="https://api.qrserver.com/v1/create-qr-code/?data=http%3A%2F%2F192.168.1.35%3A3000%2F&size=250x250&margin=4" 
+            alt="Protein Tracker Mobile QR Code" 
+          />
+        </div>
+
+        <p style="font-size:0.8125rem; color:var(--text-secondary);">
+          Scan with your phone's <strong>Camera</strong> (iPhone) or <strong>Expo Go / QR Scanner</strong> (Android) to open instantly!
+        </p>
+
+        <div class="mobile-connect-methods">
+          <div class="connect-method-card">
+            <h4>🌐 Instant Mobile Web (No App Needed)</h4>
+            <p>Open Safari or Chrome on your phone and go to:</p>
+            <div class="connect-url-pill">
+              <span>http://192.168.1.35:3000/</span>
+            </div>
+          </div>
+
+          <div class="connect-method-card">
+            <h4>📲 Expo Go App URL</h4>
+            <p>In Expo Go, tap <em>"Enter URL manually"</em> and paste:</p>
+            <div class="connect-url-pill">
+              <span>exp://192.168.1.35:8081</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
